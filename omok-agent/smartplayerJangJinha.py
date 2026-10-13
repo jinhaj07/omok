@@ -54,6 +54,7 @@ DEFAULT_PARAMS = {
     "safety": 1,      # 1 = reject root moves that allow an opponent VCF
     "tmax": 2.5,      # cap on the planned seconds per move
     "tmoves": 35,     # expected own moves per game for the time plan
+    "tsoft": 0.45,    # start no new depth after this share of the planned time
 }
 
 
@@ -820,7 +821,7 @@ class SmartPlayerJangJinha(PlayerJangJinha):
             return 0.02, max(0.05, min(0.3, remaining * 0.05))
         expected_left = max(12, self.params["tmoves"] - self.moves_played)
         per_move = min(usable / expected_left, self.params["tmax"])
-        return per_move * 0.45, min(per_move * 2.0, usable * 0.2)
+        return per_move * self.params["tsoft"], min(per_move * 2.0, usable * 0.2)
 
     def _think(self, board, time_left, start):
         e = self.engine
