@@ -655,7 +655,8 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
                 self.last_info = ("vcf", 0, 0, s.nodes)
                 return divmod(p, SIZE)
         except _TimeUp:
-            pass
+            # The search was interrupted mid-line; rebuild the position.
+            e.load(board)
         s.deadline = start + hard
         if self.node_limit is not None:
             s.nodes = 0
