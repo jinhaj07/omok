@@ -11,7 +11,9 @@ Examples (from the repository root):
     python3 tools/arena.py smart simple --games 8 --time 30 --jobs 1   # slow-machine check
 
 Player specs:
-    random | simple | smart[:key=value,...]
+    random | simple | smart[:key=value,...] | path/to/agent.py[:ClassName]
+    (a .py path loads any teammate's agent; the class defaults to the one
+     whose name starts with SmartPlayer)
     smart options: params=<json file>, depth=<int>, nodes=<int>, movetime=<sec>,
                    and any DEFAULT_PARAMS key, e.g. smart:w3=120,cap=200
 """
@@ -36,7 +38,49 @@ import smartplayerjinhajang as sp  # noqa: E402
 SIZE = 19
 
 
+_LOADED = {}
+
+
+def load_agent_class(path, class_name=None):
+    """Import an agent class from a .py file, isolated from other agents.
+
+    Each teammate's agent ships its own helper modules (e.g. its own copy of
+    the Player base class). Before importing, any cached module whose name
+    matches a .py file in the agent's directory is dropped, so every agent
+    gets its own helpers even when the file names collide."""
+    path = os.path.abspath(os.path.join(ROOT, path) if not os.path.isabs(path) else path)
+    key = (path, class_name)
+    if key in _LOADED:
+        return _LOADED[key]
+    import importlib.util
+    folder = os.path.dirname(path)
+    local = {f[:-3] for f in os.listdir(folder) if f.endswith(".py")}
+    saved = {m: sys.modules.pop(m) for m in list(sys.modules) if m in local}
+    sys.path.insert(0, folder)
+    try:
+        uniq = "agent_%d_%s" % (len(_LOADED), os.path.splitext(os.path.basename(path))[0])
+        spec = importlib.util.spec_from_file_location(uniq, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(folder)
+        for m in local:
+            sys.modules.pop(m, None)
+        sys.modules.update(saved)
+    if class_name is None:
+        names = [n for n in dir(mod) if n.startswith("SmartPlayer") and isinstance(getattr(mod, n), type)]
+        if len(names) != 1:
+            raise ValueError(f"{path}: specify the class (found {names})")
+        class_name = names[0]
+    cls = getattr(mod, class_name)
+    _LOADED[key] = cls
+    return cls
+
+
 def make_player(spec, color, nodes=None):
+    if spec.endswith(".py") or ".py:" in spec:
+        path, _, cls = spec.partition(".py")
+        return load_agent_class(path + ".py", cls.lstrip(":") or None)(color)
     name, _, opts = spec.partition(":")
     if name == "random":
         return RandomPlayer(color)

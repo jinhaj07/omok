@@ -1,9 +1,10 @@
 CAS 1102 Project 1: Omok++ — Game Agent
 
 1. Team members
-Team name: JinhaJang          (TODO: confirm final team name / members)
-Number of members: 1
-- Member name: Jinha Jang
+Team name: JRM
+Number of members: 3
+- Member name: Minjun Ryu, Geonwoo Min, Jinha Jang
+(TODO: describe each member's role)
 
 2. Running instructions
 Python version used: Python 3.13 (standard library only; works on Python 3.8+)
@@ -27,7 +28,7 @@ take_turn(board, time) follows the course interface: board is a 19x19 list
 time in milliseconds (-1 = no limit); it returns (row, col).
 
 3. LLM / AI usage declaration
-AI tool: Claude Code (Anthropic)       (TODO: model / plan used)
+AI tool: Claude Code (Anthropic), Claude Pro plan   (TODO: add other members' AI tools)
 How it was used:
 - Designing the agent architecture together (search algorithm, evaluation,
   time management, test and tuning workflow).
