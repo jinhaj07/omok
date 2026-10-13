@@ -1,4 +1,4 @@
-"""Rule and engine consistency tests for SmartPlayerJinhaJang.
+"""Rule and engine consistency tests for SmartPlayerJangJinha.
 
 Run from the repository root:  python3 -m unittest discover -s tests
 """
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "omok-agent"))
 sys.path.insert(0, os.path.join(ROOT, "omok-game"))
 
 from board import Board  # noqa: E402  (team's game infrastructure referee)
-import smartplayerjinhajang as sp  # noqa: E402
+import smartplayerJangJinha as sp  # noqa: E402
 
 SIZE = sp.SIZE
 
@@ -139,7 +139,7 @@ class PlayerTests(unittest.TestCase):
         for c in range(5, 9):
             b[9][c] = 0
         b[10][5] = b[10][6] = b[11][7] = 1
-        p = sp.SmartPlayerJinhaJang(0)
+        p = sp.SmartPlayerJangJinha(0)
         self.assertIn(p.take_turn(b, 60000), [(9, 4), (9, 9)])
 
     def test_blocks_four(self):
@@ -149,7 +149,7 @@ class PlayerTests(unittest.TestCase):
             b[9][c] = 0
         b[9][4] = 1
         b[3][3] = b[15][15] = 1
-        p = sp.SmartPlayerJinhaJang(1)
+        p = sp.SmartPlayerJangJinha(1)
         self.assertEqual(p.take_turn(b, 60000), (9, 9))
 
     def test_does_not_modify_board(self):
@@ -157,14 +157,14 @@ class PlayerTests(unittest.TestCase):
         b[9][9] = 0
         b[9][10] = 1
         copy = [row[:] for row in b]
-        sp.SmartPlayerJinhaJang(0).take_turn(b, 60000)
+        sp.SmartPlayerJangJinha(0).take_turn(b, 60000)
         self.assertEqual(b, copy)
 
     def test_first_moves(self):
         b = empty_board()
-        self.assertEqual(sp.SmartPlayerJinhaJang(0).take_turn(b, 60000), (9, 9))
+        self.assertEqual(sp.SmartPlayerJangJinha(0).take_turn(b, 60000), (9, 9))
         b[9][9] = 0
-        r, c = sp.SmartPlayerJinhaJang(1).take_turn(b, 60000)
+        r, c = sp.SmartPlayerJangJinha(1).take_turn(b, 60000)
         self.assertEqual(b[r][c], -1)
 
     def test_low_time_returns_quickly(self):
@@ -174,7 +174,7 @@ class PlayerTests(unittest.TestCase):
         for _ in range(30):
             b[rng.randint(5, 13)][rng.randint(5, 13)] = rng.randint(0, 1)
         t = time.monotonic()
-        mv = sp.SmartPlayerJinhaJang(0).take_turn(b, 300)
+        mv = sp.SmartPlayerJangJinha(0).take_turn(b, 300)
         self.assertLess(time.monotonic() - t, 0.3)
         self.assertEqual(b[mv[0]][mv[1]], -1)
 

@@ -11,15 +11,15 @@ Python version used: Python 3.13 (standard library only; works on Python 3.8+)
 No additional packages are required.
 
 The agent lives in omok-agent/:
-  smartplayerjinhajang.py   SmartPlayerJinhaJang (the game agent)
-  playerjinhajang.py        PlayerJinhaJang (copy of the Player base class)
+  smartplayerJangJinha.py   SmartPlayerJangJinha (the game agent)
+  playerJangJinha.py        PlayerJangJinha (copy of the Player base class)
 
 To use it in a game infrastructure, put both files next to omok.py and map
 player code 3 to the agent, e.g. in GameManager:
-    from smartplayerjinhajang import SmartPlayerJinhaJang
+    from smartplayerJangJinha import SmartPlayerJangJinha
     ...
     elif player == 3:
-        return SmartPlayerJinhaJang(color)
+        return SmartPlayerJangJinha(color)
 Then run, e.g.:
     python3 omok.py 3 1 1      (agent as black vs RandomPlayer, 1 minute each)
 

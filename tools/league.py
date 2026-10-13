@@ -5,7 +5,7 @@ Mirrors the course's final stage: every pair plays 8 games (4 as black,
 agent is also checked against RandomPlayer and SimplePlayer (>= 5/8 wins).
 The top agent becomes the base for the next upgrade round.
 
-    python3 tools/league.py agents/jinha/smartplayerjinhajang.py \
+    python3 tools/league.py agents/jinha/smartplayerJangJinha.py \
         agents/geonwoo/smartplayergeonwoo.py agents/minjun/smartplayerminjun.py
     python3 tools/league.py smart path/to/other.py --games 8 --jobs 2
 

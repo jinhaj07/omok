@@ -1,0 +1,16 @@
+응. 기존 오목 코드에 맞춰 **1차 GameAgent를 만들었어.**
+
+포획 이후의 승패를 계산하고, 상대의 응수를 탐색하며, 남은 시간에 맞춰 계산량을 조절해.
+
+각자 누적 1분, 흑 4판·백 4판 테스트 결과는 다음과 같아.
+
+| 상대 | 결과 |
+|---|---|
+| RandomPlayer | 8승 0패 |
+| SimplePlayer | 5승 3패 |
+
+이번 테스트에서는 두 봇의 통과 기준을 충족했어. TA 상대와 리그 성적은 아직 검증하지 못했어.
+
+[GameAgent_first_version.zip](sandbox:/workspace/scratch/dff6e41896c0/GameAgent_first_version.zip)
+
+코드·개발 설명·테스트 기록을 넣었어. **팀명은 뭐야?** 현재 클래스명에 임시로 붙인 `TeamName`을 실제 팀명으로 바꿔야 해.

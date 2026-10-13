@@ -1,4 +1,4 @@
-# SmartPlayerJinhaJang: Omok++ game agent.
+# SmartPlayerJangJinha: Omok++ game agent.
 #
 # LLM usage: this file was written with Claude Code (Anthropic) and reviewed
 # by the team. See README.txt and llm-usage/ for the full record.
@@ -22,7 +22,7 @@
 import random
 import time
 
-from playerjinhajang import PlayerJinhaJang
+from playerJangJinha import PlayerJangJinha
 
 SIZE = 19
 NCELL = SIZE * SIZE
@@ -555,7 +555,7 @@ class _Searcher:
 # ---------------------------------------------------------------------------
 # Player
 
-class SmartPlayerJinhaJang(PlayerJinhaJang):
+class SmartPlayerJangJinha(PlayerJangJinha):
     def __init__(self, color, params=None, max_depth=20, node_limit=None, move_time=None):
         super().__init__(color)
         self.params = dict(DEFAULT_PARAMS)

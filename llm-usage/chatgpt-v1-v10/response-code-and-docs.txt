@@ -1,0 +1,796 @@
+===== PROVIDED FILE: omok-agent/playerTeamName.py =====
+# AI usage: ChatGPT (Codex) adapted the project's abstract Player interface.
+from abc import ABC, abstractmethod
+
+
+class PlayerTeamName(ABC):
+    def __init__(self, color):
+        self.color = color
+
+    @abstractmethod
+    def take_turn(self, board, time):
+        pass
+
+
+===== PROVIDED FILE: omok-agent/smartplayerTeamName.py =====
+# AI usage: This first version was designed and written with ChatGPT (Codex).
+# Its algorithms, limitations, and submission requirements are in README.txt.
+from time import perf_counter
+
+from playerTeamName import PlayerTeamName
+
+SIZE = 19
+EMPTY = -1
+WALL = 2
+STRIDE = SIZE + 2
+AXES = (1, STRIDE, STRIDE + 1, STRIDE - 1)
+DIRECTIONS = AXES + tuple(-d for d in AXES)
+CELLS = tuple((r + 1) * STRIDE + c + 1 for r in range(SIZE) for c in range(SIZE))
+MATE = 10_000_000
+WINDOW_WEIGHTS = (0, 2, 30, 450, 8_000, 0)
+
+
+class SmartPlayerTeamName(PlayerTeamName):
+    def __init__(self, color):
+        super().__init__(color)
+        if color not in (0, 1):
+            raise ValueError("color must be 0 (black) or 1 (white)")
+        self._lines = self._build_lines()
+
+    def take_turn(self, board, time):
+        started = perf_counter()
+        self._grid = [WALL] * (STRIDE * STRIDE)
+        for r in range(SIZE):
+            for c in range(SIZE):
+                self._grid[(r + 1) * STRIDE + c + 1] = int(board[r][c])
+        empty = [p for p in CELLS if self._grid[p] == EMPTY]
+        if not empty:
+            raise ValueError("No legal move: the board is full.")
+        if len(empty) == SIZE * SIZE:
+            return SIZE // 2, SIZE // 2
+
+        candidates = self._candidates()
+        best = min(candidates, key=self._centre_distance)
+        remaining = float(time) / 1000 if time != -1 else None
+        if remaining is not None and remaining <= 0.015:
+            return self._coordinates(best)
+        budget = 1.0 if remaining is None else min(1.0, remaining / 30, max(0, remaining - 0.02))
+        self._deadline = started + budget
+        self._line_cache = {}
+        self.last_depth = 0
+        self.last_nodes = 0
+
+        try:
+            ranked = self._rank_moves(self.color)
+            if ranked:
+                best = ranked[0][1]
+            if ranked and ranked[0][0] >= MATE:
+                return self._coordinates(best)
+            for depth in range(1, 5):
+                ordered = sorted(ranked[:14], key=lambda item: item[1] != best)
+                depth_best, depth_score = best, -2 * MATE
+                alpha = -2 * MATE
+                for _, move in ordered:
+                    self._check_time()
+                    captured = self._make_move(move, self.color)
+                    try:
+                        outcome = self._outcome(move, self.color, captured)
+                        if outcome is not None:
+                            score = outcome * MATE
+                        else:
+                            score = -self._search(1 - self.color, depth - 1, -2 * MATE, -alpha, 1)
+                    finally:
+                        self._undo_move(move, self.color, captured)
+                    if score > depth_score:
+                        depth_best, depth_score = move, score
+                    alpha = max(alpha, score)
+                best = depth_best
+                self.last_depth = depth
+                if abs(depth_score) > MATE - 1000:
+                    break
+        except TimeoutError:
+            pass
+        return self._coordinates(best)
+
+    def _search(self, color, depth, alpha, beta, ply):
+        self._check_time()
+        self.last_nodes += 1
+        if not any(self._grid[p] == EMPTY for p in CELLS):
+            return 0
+        if depth == 0:
+            return self._evaluate(color)
+        moves = self._rank_moves(color)
+        if moves[0][0] >= MATE:
+            return MATE - ply
+        best = -2 * MATE
+        for _, move in moves[:10]:
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome is not None:
+                    score = outcome * (MATE - ply)
+                else:
+                    score = -self._search(1 - color, depth - 1, -beta, -alpha, ply + 1)
+            finally:
+                self._undo_move(move, color, captured)
+            best = max(best, score)
+            alpha = max(alpha, score)
+            if alpha >= beta:
+                break
+        return best
+
+    def _rank_moves(self, color):
+        opponent = 1 - color
+        result, winning, threats = [], [], []
+        for move in self._candidates():
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                attack = self._local_score(move, color) + 600 * len(captured)
+                attack -= 900 * self._vulnerable_pairs(move, color)
+            finally:
+                self._undo_move(move, color, captured)
+            if outcome == 1:
+                winning.append((MATE, move))
+            captured = self._make_move(move, opponent)
+            try:
+                other_outcome = self._outcome(move, opponent, captured)
+                defence = self._local_score(move, opponent) + 600 * len(captured)
+            finally:
+                self._undo_move(move, opponent, captured)
+            if other_outcome == 1:
+                threats.append(move)
+            score = attack + 0.95 * defence - self._centre_distance(move) * 0.1
+            if outcome == -1:
+                score = -MATE
+            elif outcome == 0:
+                score = -50
+            result.append((score, move))
+        if winning:
+            return sorted(winning, reverse=True)
+        if threats:
+            adjusted = []
+            safe_moves = []
+            for score, move in result:
+                self._check_time()
+                captured = self._make_move(move, color)
+                try:
+                    outcome = self._outcome(move, color, captured)
+                    safe = outcome == 0
+                    if outcome is None:
+                        safe = True
+                        for reply in threats:
+                            if self._grid[reply] != EMPTY:
+                                continue
+                            taken = self._make_move(reply, opponent)
+                            try:
+                                if self._outcome(reply, opponent, taken) == 1:
+                                    safe = False
+                            finally:
+                                self._undo_move(reply, opponent, taken)
+                            if not safe:
+                                break
+                    adjusted.append((score if safe else score - 2 * MATE, move))
+                    if safe:
+                        safe_moves.append((score, move))
+                finally:
+                    self._undo_move(move, color, captured)
+            result = safe_moves or adjusted
+        return sorted(result, reverse=True)
+
+    def _candidates(self):
+        grid = self._grid
+        near = set()
+        for p in CELLS:
+            if grid[p] in (0, 1):
+                r, c = self._coordinates(p)
+                for rr in range(max(0, r - 2), min(SIZE, r + 3)):
+                    for cc in range(max(0, c - 2), min(SIZE, c + 3)):
+                        q = (rr + 1) * STRIDE + cc + 1
+                        if grid[q] == EMPTY:
+                            near.add(q)
+        return sorted(near) or [p for p in CELLS if grid[p] == EMPTY]
+
+    def _make_move(self, move, color):
+        grid = self._grid
+        grid[move] = color
+        opponent = 1 - color
+        captured = []
+        for direction in DIRECTIONS:
+            a, b, end = move + direction, move + 2 * direction, move + 3 * direction
+            if 0 <= end < len(grid) and grid[a] == opponent and grid[b] == opponent and grid[end] == color:
+                captured.extend((a, b))
+        for p in captured:
+            grid[p] = EMPTY
+        return captured
+
+    def _undo_move(self, move, color, captured):
+        self._grid[move] = EMPTY
+        for p in captured:
+            self._grid[p] = 1 - color
+
+    def _exact_five_at(self, move, color):
+        if self._grid[move] != color:
+            return False
+        for axis in AXES:
+            length = 1
+            for direction in (axis, -axis):
+                p = move + direction
+                while 0 <= p < len(self._grid) and self._grid[p] == color:
+                    length += 1
+                    p += direction
+            if length == 5:
+                return True
+        return False
+
+    def _outcome(self, move, color, captured):
+        mine = self._exact_five_at(move, color)
+        opponent = 1 - color
+        theirs = False
+        for removed in captured:
+            for direction in DIRECTIONS:
+                p = removed + direction
+                if 0 <= p < len(self._grid) and self._grid[p] == opponent:
+                    if self._exact_five_at(p, opponent):
+                        theirs = True
+                        break
+            if theirs:
+                break
+        if mine and theirs:
+            return 0
+        if mine:
+            return 1
+        if theirs:
+            return -1
+        return None
+
+    def _local_score(self, move, color):
+        grid = self._grid
+        total = 0
+        for axis in AXES:
+            length, open_ends = 1, 0
+            for direction in (axis, -axis):
+                p = move + direction
+                while 0 <= p < len(grid) and grid[p] == color:
+                    length += 1
+                    p += direction
+                if 0 <= p < len(grid) and grid[p] == EMPTY:
+                    open_ends += 1
+            if length == 4:
+                total += 45_000 if open_ends == 2 else 6_000 if open_ends else 0
+            elif length == 3:
+                total += 3_000 if open_ends == 2 else 250 if open_ends else 0
+            elif length == 2:
+                total += 120 if open_ends == 2 else 20 if open_ends else 0
+            for offset in range(5):
+                start = move - offset * axis
+                end = start + 4 * axis
+                if not (0 <= start < len(grid) and 0 <= end < len(grid)):
+                    continue
+                cells = [grid[start + i * axis] for i in range(5)]
+                if any(value not in (EMPTY, color) for value in cells):
+                    continue
+                before, after = start - axis, end + axis
+                if 0 <= before < len(grid) and grid[before] == color:
+                    continue
+                if 0 <= after < len(grid) and grid[after] == color:
+                    continue
+                total += WINDOW_WEIGHTS[cells.count(color)]
+        return total
+
+    def _vulnerable_pairs(self, move, color):
+        count, grid = 0, self._grid
+        for direction in DIRECTIONS:
+            a, before, after = move + direction, move - direction, move + 2 * direction
+            if not (0 <= before < len(grid) and 0 <= after < len(grid)):
+                continue
+            if grid[a] == color and {grid[before], grid[after]} == {1 - color, EMPTY}:
+                count += 1
+        return count
+
+    def _evaluate(self, color):
+        total = 0
+        for line in self._lines:
+            values = tuple(self._grid[p] for p in line)
+            if values not in self._line_cache:
+                self._line_cache[values] = self._score_line(values, 0) - self._score_line(values, 1)
+            total += self._line_cache[values]
+        return total if color == 0 else -total
+
+    def _score_line(self, values, color):
+        total = 0
+        for start in range(len(values) - 4):
+            window = values[start:start + 5]
+            if any(value not in (EMPTY, color) for value in window):
+                continue
+            if start and values[start - 1] == color:
+                continue
+            if start + 5 < len(values) and values[start + 5] == color:
+                continue
+            count = window.count(color)
+            total += WINDOW_WEIGHTS[count]
+        i = 0
+        while i < len(values):
+            if values[i] != color:
+                i += 1
+                continue
+            start = i
+            while i < len(values) and values[i] == color:
+                i += 1
+            length = i - start
+            ends = int(start > 0 and values[start - 1] == EMPTY) + int(i < len(values) and values[i] == EMPTY)
+            if length == 4 and ends == 2:
+                total += 30_000
+            elif length == 3 and ends == 2:
+                total += 2_000
+            elif length == 2 and ends == 2:
+                total += 80
+        for i in range(len(values) - 3):
+            pair = values[i:i + 4]
+            if pair in ((1 - color, color, color, EMPTY), (EMPTY, color, color, 1 - color)):
+                total -= 700
+        return total
+
+    def _build_lines(self):
+        lines = []
+        for axis in AXES:
+            for p in CELLS:
+                r, c = self._coordinates(p - axis)
+                if 0 <= r < SIZE and 0 <= c < SIZE:
+                    continue
+                line, q = [], p
+                while True:
+                    r, c = self._coordinates(q)
+                    if not (0 <= r < SIZE and 0 <= c < SIZE):
+                        break
+                    line.append(q)
+                    q += axis
+                if len(line) >= 4:
+                    lines.append(tuple(line))
+        return tuple(lines)
+
+    def _coordinates(self, move):
+        return move // STRIDE - 1, move % STRIDE - 1
+
+    def _centre_distance(self, move):
+        r, c = self._coordinates(move)
+        return abs(r - SIZE // 2) + abs(c - SIZE // 2)
+
+    def _check_time(self):
+        if perf_counter() >= self._deadline:
+            raise TimeoutError
+
+
+===== PROVIDED FILE: test_agent.py =====
+# AI usage: ChatGPT (Codex) wrote these independent rule and behavior checks.
+import random
+import sys
+from pathlib import Path
+from time import perf_counter
+
+sys.path.insert(0, str(Path(__file__).parent / "omok-agent"))
+from smartplayerTeamName import SmartPlayerTeamName, CELLS, STRIDE, WALL
+
+SIZE = 19
+AXES = ((0, 1), (1, 0), (1, 1), (1, -1))
+
+
+def grid():
+    return [[-1] * SIZE for _ in range(SIZE)]
+
+
+def has_five(board, color):
+    for r in range(SIZE):
+        for c in range(SIZE):
+            if board[r][c] != color:
+                continue
+            for dr, dc in AXES:
+                pr, pc = r - dr, c - dc
+                if 0 <= pr < SIZE and 0 <= pc < SIZE and board[pr][pc] == color:
+                    continue
+                n, rr, cc = 0, r, c
+                while 0 <= rr < SIZE and 0 <= cc < SIZE and board[rr][cc] == color:
+                    n += 1
+                    rr, cc = rr + dr, cc + dc
+                if n == 5:
+                    return True
+    return False
+
+
+def oracle(board, move, color):
+    after = [row[:] for row in board]
+    r, c = move
+    after[r][c] = color
+    removed = set()
+    for dr, dc in AXES:
+        for sign in (-1, 1):
+            rr, cc = r + sign * 3 * dr, c + sign * 3 * dc
+            if not (0 <= rr < SIZE and 0 <= cc < SIZE):
+                continue
+            a = (r + sign * dr, c + sign * dc)
+            b = (r + sign * 2 * dr, c + sign * 2 * dc)
+            if after[a[0]][a[1]] == after[b[0]][b[1]] == 1 - color and after[rr][cc] == color:
+                removed.update((a, b))
+    for rr, cc in removed:
+        after[rr][cc] = -1
+    mine, theirs = has_five(after, color), has_five(after, 1 - color)
+    result = 0 if mine and theirs else 1 if mine else -1 if theirs else None
+    return after, removed, result
+
+
+def set_position(agent, board):
+    agent._grid = [WALL] * (STRIDE * STRIDE)
+    for r in range(SIZE):
+        for c in range(SIZE):
+            agent._grid[(r + 1) * STRIDE + c + 1] = board[r][c]
+    agent._deadline = float("inf")
+
+
+def check_simulation(agent, board, move, color):
+    set_position(agent, board)
+    original = agent._grid[:]
+    p = (move[0] + 1) * STRIDE + move[1] + 1
+    taken = agent._make_move(p, color)
+    expected, removed, result = oracle(board, move, color)
+    actual = [[agent._grid[(r + 1) * STRIDE + c + 1] for c in range(SIZE)] for r in range(SIZE)]
+    assert actual == expected, (move, color, "capture mismatch")
+    assert {agent._coordinates(q) for q in taken} == removed
+    assert agent._outcome(p, color, taken) == result, (move, color, "outcome mismatch")
+    agent._undo_move(p, color, taken)
+    assert agent._grid == original, "undo mismatch"
+
+
+def main():
+    agent = SmartPlayerTeamName(0)
+    for dr, dc in AXES:
+        for sign in (-1, 1):
+            board = grid()
+            move = (9, 9)
+            for k in (1, 2):
+                board[9 + sign * k * dr][9 + sign * k * dc] = 1
+            board[9 + sign * 3 * dr][9 + sign * 3 * dc] = 0
+            check_simulation(agent, board, move, 0)
+    board = grid()
+    for dr, dc in AXES:
+        for sign in (-1, 1):
+            for k in (1, 2):
+                board[9 + sign * k * dr][9 + sign * k * dc] = 1
+            board[9 + sign * 3 * dr][9 + sign * 3 * dc] = 0
+    check_simulation(agent, board, (9, 9), 0)
+    for length in (4, 5):
+        board = grid()
+        for c in range(3, 3 + length):
+            board[8][c] = 0
+        check_simulation(agent, board, (8, 3 + length), 0)
+
+    # Capturing an endpoint of the opponent's six creates an opponent victory.
+    board = grid()
+    for c in range(5, 11):
+        board[8][c] = 1
+    board[9][5], board[10][5] = 1, 0
+    check_simulation(agent, board, (7, 5), 0)
+    # The same capture plus the mover's exact five makes a simultaneous draw.
+    for c in range(1, 5):
+        board[7][c] = 0
+    check_simulation(agent, board, (7, 5), 0)
+
+    rng = random.Random(20261006)
+    checked = 0
+    for _ in range(250):
+        board = grid()
+        for p in rng.sample(range(SIZE * SIZE), rng.randrange(2, 140)):
+            board[p // SIZE][p % SIZE] = rng.randrange(2)
+        if has_five(board, 0) or has_five(board, 1):
+            continue
+        empties = [(r, c) for r in range(SIZE) for c in range(SIZE) if board[r][c] == -1]
+        for move in rng.sample(empties, 5):
+            check_simulation(agent, board, move, rng.randrange(2))
+            checked += 1
+    board = grid()
+    for c in range(4, 8):
+        board[9][c] = 0
+    original = [row[:] for row in board]
+    assert oracle(board, agent.take_turn(board, 60_000), 0)[2] == 1
+    assert board == original, "take_turn modified its input"
+    board = grid()
+    for c in range(4, 8):
+        board[9][c] = 1
+    board[8][5], board[10][5] = 1, 0
+    # Neither end block saves an open four; capturing a pair does.
+    move = agent.take_turn(board, 60_000)
+    after, _, _ = oracle(board, move, 0)
+    assert not any(oracle(after, (r, c), 1)[2] == 1 for r in range(SIZE) for c in range(SIZE) if after[r][c] == -1), move
+    for color in (0, 1):
+        for remaining_ms in (1, 10, 50, 200, 1000):
+            board = grid()
+            board[9][9] = 1 - color
+            player = SmartPlayerTeamName(color)
+            before = [row[:] for row in board]
+            started = perf_counter()
+            r, c = player.take_turn(board, remaining_ms)
+            elapsed_ms = (perf_counter() - started) * 1000
+            assert board[r][c] == -1 and board == before
+            assert elapsed_ms < max(5, remaining_ms), (remaining_ms, elapsed_ms)
+    assert isinstance(SmartPlayerTeamName(0), agent.__class__.__bases__[0])
+    print(f"PASS: 8 capture directions, multi-capture, exact five/overline, capture loss/draw, {checked} randomized simulations, winning move, capture defence, input preservation, low-time returns")
+
+
+if __name__ == "__main__":
+    main()
+
+
+===== PROVIDED FILE: benchmark.py =====
+# AI usage: ChatGPT (Codex) wrote this local, cumulative-time match runner.
+import argparse
+import json
+import random
+import sys
+from pathlib import Path
+from time import perf_counter
+
+sys.path.insert(0, str(Path(__file__).parent / "omok-agent"))
+from smartplayerTeamName import SmartPlayerTeamName
+
+
+def play(opponent_class, agent_color, seed, board_class):
+    random.seed(seed)
+    board = board_class()
+    players = [None, None]
+    players[agent_color] = SmartPlayerTeamName(agent_color)
+    players[1 - agent_color] = opponent_class(1 - agent_color)
+    remaining = [60.0, 60.0]
+    turns = [0, 0]
+    current = 0
+    for ply in range(1200):
+        before = board.GetBoard()
+        snapshot = [row[:] for row in before]
+        started = perf_counter()
+        try:
+            move = players[current].take_turn(before, remaining[current] * 1000)
+        except Exception as exc:
+            return {"result": "loss" if current == agent_color else "win", "reason": f"player {current} exception: {type(exc).__name__}: {exc}", "plies": ply}
+        remaining[current] -= perf_counter() - started
+        turns[current] += 1
+        if remaining[current] < 0 or before != snapshot:
+            return {"result": "loss" if current == agent_color else "win", "reason": "timeout or input mutation", "plies": ply}
+        if not (isinstance(move, tuple) and len(move) == 2 and all(type(x) is int for x in move) and board.ValidPosition(*move)):
+            return {"result": "loss" if current == agent_color else "win", "reason": "illegal move", "plies": ply}
+        board.PlaceStone(*move, current)
+        board.TakeStone(*move, current)
+        wins = [board.CheckOmok(color) for color in (0, 1)]
+        result = "draw" if all(wins) else "win" if wins[agent_color] else "loss" if wins[1 - agent_color] else "draw" if board.FullBoard() else None
+        if result:
+            return {"result": result, "reason": "board result", "plies": ply + 1, "agent_seconds": round(60 - remaining[agent_color], 4), "opponent_seconds": round(60 - remaining[1 - agent_color], 4), "agent_turns": turns[agent_color]}
+        current = 1 - current
+    return {"result": "unfinished", "reason": "testing ply cap (not a game draw)", "plies": 1200}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("existing_folder", help="Folder containing the original board.py, player.py, randomplayer.py, simpleplayer.py")
+    parser.add_argument("--games", type=int, default=8)
+    parser.add_argument("--opponent", choices=("random", "simple", "both"), default="both")
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    sys.path.insert(0, str(Path(args.existing_folder).resolve()))
+    from board import Board
+    from randomplayer import RandomPlayer
+    from simpleplayer import SimplePlayer
+    results = []
+    opponents = [("RandomPlayer", RandomPlayer), ("SimplePlayer", SimplePlayer)]
+    if args.opponent != "both":
+        opponents = [opponents[0 if args.opponent == "random" else 1]]
+    for name, opponent in opponents:
+        for game in range(args.games):
+            color = game % 2
+            result = play(opponent, color, 2026100600 + game, Board)
+            result.update(opponent=name, agent_color="black" if color == 0 else "white", seed=2026100600 + game)
+            results.append(result)
+            print(json.dumps(result), flush=True)
+    payload = {"limit_seconds_per_player_per_game": 60, "games": results}
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
+
+
+===== PROVIDED FILE: run_agent.py =====
+# AI usage: ChatGPT (Codex) wrote this test entry point; the original project files are imported unchanged.
+import argparse
+import sys
+from pathlib import Path
+from time import perf_counter
+
+sys.path.insert(0, str(Path(__file__).parent / "omok-agent"))
+from smartplayerTeamName import SmartPlayerTeamName
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("existing_folder")
+    parser.add_argument("player1", type=int, choices=range(4))
+    parser.add_argument("player2", type=int, choices=range(4))
+    parser.add_argument("minutes", type=int)
+    args = parser.parse_args()
+    sys.path.insert(0, str(Path(args.existing_folder).resolve()))
+    from board import Board
+    from humanplayer import HumanPlayer
+    from randomplayer import RandomPlayer
+    from simpleplayer import SimplePlayer
+    kinds = (HumanPlayer, RandomPlayer, SimplePlayer, SmartPlayerTeamName)
+    players = [kinds[args.player1](0), kinds[args.player2](1)]
+    remaining = [args.minutes * 60.0] * 2
+    board = Board()
+    current = 0
+    board.PrintBoard()
+    while True:
+        supplied = board.GetBoard()
+        snapshot = [row[:] for row in supplied]
+        started = perf_counter()
+        r, c = players[current].take_turn(supplied, -1 if args.minutes == -1 else remaining[current] * 1000)
+        elapsed = perf_counter() - started
+        if args.minutes != -1:
+            remaining[current] -= elapsed
+            if remaining[current] < 0:
+                print("Time Out!", "White Wins" if current == 0 else "Black Wins")
+                return
+        if supplied != snapshot or not board.ValidPosition(r, c):
+            raise ValueError("A player modified its input or returned an illegal move.")
+        board.PlaceStone(r, c, current)
+        board.TakeStone(r, c, current)
+        board.PrintBoard()
+        wins = [board.CheckOmok(color) for color in (0, 1)]
+        if all(wins) or board.FullBoard() and not any(wins):
+            print("Draw")
+            return
+        if any(wins):
+            print("Black Wins" if wins[0] else "White Wins")
+            return
+        current = 1 - current
+
+
+if __name__ == "__main__":
+    main()
+
+
+===== PROVIDED FILE: README.txt =====
+Omok++ GameAgent 첫 개발 버전
+
+이 파일은 개발·학습용 첫 버전입니다. 최종 제출 ZIP은 아닙니다.
+TeamName은 실제 팀명으로 바꿔야 하는 자리표시자입니다.
+원래 Game Infrastructure, GUI, 멀티세션 파일은 수정하지 않았습니다.
+
+1. 팀원
+실제 팀원 명단과 팀명을 사용자가 기입해야 합니다.
+
+2. 실행 방법
+Python 3 표준 라이브러리만 사용합니다. 추가 pip 설치나 인터넷 연결은 필요 없습니다.
+
+압축을 푼 agent_first 폴더에서 규칙 검사를 실행합니다.
+python3 test_agent.py
+
+기존 프로젝트 폴더에 board.py, player.py, humanplayer.py,
+randomplayer.py, simpleplayer.py가 있어야 아래 대결 도구를 사용할 수 있습니다.
+기존 폴더의 경로에 공백이 있으면 반드시 큰따옴표로 감쌉니다.
+
+사람(흑) 대 새 에이전트(백), 각자 총 1분:
+python3 run_agent.py "/기존/프로젝트/폴더" 0 3 1
+
+새 에이전트(흑) 대 SimplePlayer(백), 각자 총 1분:
+python3 run_agent.py "/기존/프로젝트/폴더" 3 2 1
+
+새 에이전트(백) 대 SimplePlayer(흑), 각자 총 1분:
+python3 run_agent.py "/기존/프로젝트/폴더" 2 3 1
+
+RandomPlayer 및 SimplePlayer 각각과 8판(흑 4판, 백 4판) 대결:
+python3 benchmark.py "/기존/프로젝트/폴더" --games 8 --output results.json
+
+에이전트만 직접 사용하려면 omok-agent 폴더를 모듈 경로에 놓고
+from smartplayerTeamName import SmartPlayerTeamName
+으로 불러온 후 SmartPlayerTeamName(0) 또는 SmartPlayerTeamName(1)을 생성합니다.
+take_turn(board, remaining_ms)는 수정하지 않은 19x19 보드를 받아
+0부터 세는 (행, 열) 정수 튜플을 반환합니다. time=-1은 무제한입니다.
+
+3. AI 사용 선언
+이 버전의 SmartPlayerTeamName 알고리즘 설계, 구현, 개발 설명,
+테스트 및 대결 실행 도구는 ChatGPT(Codex)의 도움으로 작성했습니다.
+PlayerTeamName은 과제의 기존 Player 규격을 따라 팀명 접미사를 붙인 클래스입니다.
+각 코드 파일 첫 부분에도 AI 사용 표시가 있습니다.
+사용자가 사용한 요금제: 제공된 대화 맥락 기준 ChatGPT Plus.
+최종 제출에는 실제 사용 화면에 표시된 모델명과 실제 요금제를 확인하여 적어야 합니다.
+llm-usage에는 이 개발 턴의 요청과 제공 코드·설명 기록을 포함했습니다.
+이후 수정에 사용한 모든 프롬프트와 응답도 추가해야 합니다.
+과제는 코드를 본인이 설명하고 재현할 수 있을 것을 요구합니다.
+
+4. 참고·출처
+사용자가 첨부한 CAS 1102 Project 1: Omok++ 과제 PDF.
+사용자가 기존에 제공한 Player 인터페이스, Board, RandomPlayer,
+SimplePlayer를 규격 확인 및 대결에 사용했습니다.
+기존 제공 봇과 게임 파일은 이 ZIP에 복사하여 포함하지 않았습니다.
+이번 구현에는 웹 자료나 다른 팀의 에이전트 코드를 사용하지 않았습니다.
+
+5. 구현 개요
+- 이미 놓인 돌의 주변 두 칸 안에서 후보 수를 고릅니다.
+- 개인 복사본에서 착수와 여덟 방향 포획을 적용하고 원상 복구합니다.
+- 여섯 개 이상은 승리로 세지 않고, 상대의 장목이 포획으로 다섯 개가 되는 경우도 판정합니다.
+- 당장 이기는 수를 먼저 선택합니다.
+- 상대가 다음 한 수로 이길 수 있으면, 단순히 자리를 막는 수 외에 포획 방어도 찾습니다.
+- 공격·방어 모양으로 후보를 정렬하고, 반복 심화와 알파베타 탐색을 수행합니다.
+- 한 턴에 최대 약 1초, 남은 시간의 약 1/30을 계산 예산으로 잡습니다.
+- 탐색이 중단되면 마지막으로 끝까지 계산한 단계의 수를 반환합니다.
+
+6. 한계·다음 개발
+첫 버전은 뿌리 후보 최대 14개, 이후 최대 10개로 탐색 폭을 제한합니다.
+최대 네 수 깊이까지 시도하지만, 실제 완료 깊이는 남은 시간·판의 복잡도·컴퓨터 성능에 따라 다릅니다.
+모든 수를 끝까지 탐색하는 완전한 전략은 아니며, 깊은 강제 승리나 일부 포획 위협을 놓칠 수 있습니다.
+시간 관리는 협력적으로 계산을 끝내는 방식입니다. 프로세스를 강제로 중단하는 Infrastructure timeout과는 별개입니다.
+짧은 시간이나 복잡한 판에서는 정렬 전 기본 후보를 반환할 수 있습니다.
+테스트에서 사용한 1200수 상한은 개발 도구의 중단 조건이고 게임의 무승부 규칙이 아닙니다.
+TA 에이전트가 공개되지 않았으므로 TA 상대 성적과 리그 순위는 검증할 수 없습니다.
+
+7. 최종 제출 전에 할 일
+팀명과 팀원 정보를 확인하고 클래스명, 파일명, import의 TeamName을 실제 팀명으로 바꿉니다.
+필요한 에이전트 파일은 omok-agent 하위 폴더에 유지합니다.
+최종 ZIP 이름은 omok-agent-[팀명].zip이어야 합니다.
+README.txt 및 모든 LLM 사용 대화 기록을 ZIP 최상위에 포함합니다.
+별도 테스트 실행 도구는 본 에이전트의 실행 의존성이 아닙니다.
+
+8. 이번 실행 환경의 검증 결과
+규칙·동작 검사 통과: 여덟 포획 방향, 다중 포획, 정확히 다섯 개/장목,
+포획으로 상대 승리/동시 무승부, 독립 판정과 1170회 비교,
+즉시 승리, 포획 방어, 입력 보드 유지, 짧은 잔여시간 반환.
+RandomPlayer: 흑 4판·백 4판, 8승 0무 0패.
+SimplePlayer: 흑 4판·백 4판, 5승 0무 3패.
+모두 각 플레이어의 게임 전체 누적 60초 조건이며, 에이전트 시간초과·오류·불법 수는 없었습니다.
+이 결과는 현재 실행 환경과 선택한 시드에서의 개발 테스트입니다.
+탐색 완료 깊이가 컴퓨터 속도에 영향을 받으므로 채점 결과를 보장하지 않습니다.
+판별 결과와 시드·흑백·누적 사용 시간은 benchmark_results.json에서 확인할 수 있습니다.
+
+
+===== PROVIDED FILE: 개발설명.md =====
+# 이번 GameAgent가 하는 일
+
+기존 프로젝트의 `GameManager`는 실제 게임 진행을 맡습니다. 새 `SmartPlayerTeamName`은 자기 차례에 받은 판을 보고 **어디에 둘지 결정하는 일**을 맡습니다.
+
+```python
+agent = SmartPlayerTeamName(0)
+row, col = agent.take_turn(board, 60000)
+```
+
+`0`은 흑, `1`은 백입니다. `60000`은 이 플레이어에게 게임 전체에서 남은 60,000ms입니다. 입력받은 `board`는 바꾸지 않고 `(행, 열)`만 반환합니다.
+
+## 수를 고르는 과정
+
+1. 빈 칸 전체를 무작정 탐색하지 않고, 기존 돌에서 두 칸 이내인 위치를 후보로 모읍니다.
+2. 후보 위치에 내 돌을 놓았다고 가정하고, 포획할 돌을 제거합니다.
+3. 이 상태가 내 승리·상대 승리·동시 승리인지 확인합니다.
+4. 같은 위치에 상대가 두었을 때의 위협도 계산합니다.
+5. 상대에게 즉시 승리 수가 있으면 그 위협을 없애는 수를 우선 검토합니다. 상대의 두 돌을 잡아 공격 모양을 깨는 방어도 포함합니다.
+6. 유망한 수부터 상대의 응수와 이후의 내 수를 탐색합니다.
+7. 시간 예산이 끝나면 마지막으로 계산을 마친 결과를 반환합니다.
+
+## SimplePlayer보다 추가된 점
+
+기존 SimplePlayer는 주로 지금 한 수를 둔 직후의 모양에 점수를 줍니다. 이번 버전은 상대도 가장 좋은 응수를 고른다고 가정하고 이후의 판까지 비교합니다. 당장의 모양이 좋아도 상대가 다음 차례에 이길 수 있으면 탐색에서 불리하게 평가됩니다. 다만 깊이와 후보 수를 제한하므로 놓치는 수가 남아 있습니다.
+
+## 반드시 이해해야 할 네 가지
+
+**가상 착수와 원상 복구:** `_make_move()`는 개인 복사본에 돌을 놓고 포획합니다. `_undo_move()`는 그 돌을 빼고 잡았던 돌을 돌려놓습니다. 이것을 반복해야 서로 다른 후보를 같은 출발점에서 비교할 수 있습니다. `try/finally`는 계산 도중 시간 제한으로 빠져나와도 판을 원상 복구하게 합니다.
+
+**평가 함수:** `_local_score()`는 후보 정렬에 쓰고 `_evaluate()`는 탐색 끝의 판 전체를 평가합니다. 다섯 칸 구간에 내 돌이 얼마나 모였는지, 양 끝이 열린 연속 모양인지, 잡힐 수 있는 두 돌이 있는지 등을 숫자로 나타냅니다. 점수 상수는 증명된 정답이 아니라 대결로 조정할 요소입니다.
+
+**상대 응수 탐색:** `_search()`는 현재 차례의 플레이어 관점에서 점수를 반환합니다. 상대에게 좋은 점수는 나에게 나쁜 점수이므로 반환값의 부호를 바꿉니다. 알파베타는 이미 확인한 선택보다 나아질 가능성이 없는 가지를 계산하지 않는 방법입니다.
+
+**반복 심화와 시간:** 한 수 깊이 탐색을 마친 뒤 두 수, 세 수로 깊이를 늘립니다. 세 수 탐색 도중 시간이 끝나도 두 수 탐색의 완성된 결과를 쓸 수 있습니다. 최대 깊이 네 수는 목표이고 매 차례 보장하는 깊이는 아닙니다.
+
+## 왜 포획 이후의 상대 승리도 확인하나
+
+상대의 여섯 돌이 연속되어 있으면 그 자체는 승리가 아닙니다. 그런데 내가 그 끝 돌을 잡아 다섯 돌만 남기면 상대가 이깁니다. 같은 수로 내 다섯 돌까지 완성되면 무승부입니다. 그래서 포획은 항상 공격상 이득이라고 가정하면 안 됩니다.
+
+## 다음으로 강화할 부분
+
+첫 버전의 대결 기록에서 실제로 진 판을 확인하고, 방어 누락·탐색 깊이·시간 사용 중 어떤 이유였는지 구분하는 것이 다음 단계입니다. 이후에는 강제 승리 위협의 연속 탐색, 중복 판 탐색 결과 저장, 상황별 후보 수와 시간 예산 조정을 검토할 수 있습니다. 리그 상위권 여부는 상대 팀 에이전트와 대결해 보아야 판단할 수 있습니다.

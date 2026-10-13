@@ -1,4 +1,4 @@
-"""Self-play parameter tuning for SmartPlayerJinhaJang (development tool).
+"""Self-play parameter tuning for SmartPlayerJangJinha (development tool).
 
 (1+1) hill climbing: each iteration perturbs 1-3 evaluation parameters of the
 current best set (multiplicatively, in log space), plays a paired match
@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(ROOT, "omok-agent"))
 
 import arena  # noqa: E402
-import smartplayerjinhajang as sp  # noqa: E402
+import smartplayerJangJinha as sp  # noqa: E402
 
 TUNABLE = ["w1", "w2", "w3", "w4", "cap", "tempo", "defw", "capb"]
 OUT_DIR = os.path.join(ROOT, "tuning")

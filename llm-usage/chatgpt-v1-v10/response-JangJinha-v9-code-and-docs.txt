@@ -1,0 +1,1234 @@
+ChatGPT(Codex) 작성 코드·문서 사본
+
+# AI usage: ChatGPT (Codex) wrote the v9 evaluation and candidate selection.
+# Its algorithms, limitations, and submission requirements are in README.txt.
+from time import perf_counter
+from collections import OrderedDict
+
+from playerJangJinha import PlayerJangJinha
+
+SIZE = 19
+EMPTY = -1
+WALL = 2
+STRIDE = SIZE + 2
+AXES = (1, STRIDE, STRIDE + 1, STRIDE - 1)
+DIRECTIONS = AXES + tuple(-d for d in AXES)
+CELLS = tuple((r + 1) * STRIDE + c + 1 for r in range(SIZE) for c in range(SIZE))
+MATE = 10_000_000
+WINDOW_WEIGHTS = (0, 2, 30, 450, 8_000, 0)
+MAX_DEPTH = 6
+QUIESCENCE_DEPTH = 6
+ROOT_WIDTH = 26
+REPLY_WIDTH = 16
+INNER_WIDTH = 12
+FORCING_WIDTH = 8
+CAPTURE_ATTACK_WIDTH = 4
+CAPTURE_DEFENCE_LIMIT = 4
+PREVENTION_MAX_PLY = 2
+POSITION_CACHE_LIMIT = 20_000
+LINE_CACHE_LIMIT = 40_000
+STRONG_THREE_SCORE = 5_500
+MULTIPLE_THREAT_BONUS = 6_000
+FORK_MOVE_BONUS = 25_000
+PRIORITY_EXTRA_LIMIT = 4
+
+
+class SmartPlayerJangJinha(PlayerJangJinha):
+    def __init__(self, color):
+        super().__init__(color)
+        if color not in (0, 1):
+            raise ValueError("color must be 0 (black) or 1 (white)")
+        self._lines = self._build_lines()
+        memberships = [[] for _ in range(STRIDE * STRIDE)]
+        for lid, line in enumerate(self._lines):
+            for offset, p in enumerate(line):
+                memberships[p].append((lid, 2 * offset))
+        self._memberships = tuple(map(tuple, memberships))
+        neighbors = [[] for _ in range(STRIDE * STRIDE)]
+        for p in CELLS:
+            r, c = self._coordinates(p)
+            neighbors[p] = tuple((rr + 1) * STRIDE + cc + 1
+                                 for rr in range(max(0, r - 2), min(SIZE, r + 3))
+                                 for cc in range(max(0, c - 2), min(SIZE, c + 3)))
+        self._neighbors = tuple(neighbors)
+        self._indexed_grid = None
+        self._line_cache = OrderedDict()
+        self._line_tactic_cache = OrderedDict()
+        self._best_moves = OrderedDict()
+        self._history = [[0] * (STRIDE * STRIDE) for _ in range(2)]
+        self._killers = {}
+        self.last_pv_hits = 0
+        self.last_pvs_researches = 0
+        self.last_line_updates = 0
+        self.last_prevention_calls = 0
+        self._q_depth = QUIESCENCE_DEPTH
+        self.last_depth = 0
+        self.last_nodes = 0
+        self.last_qnodes = 0
+        self.last_extension = 0
+        self._tactical_cache = {}
+        self._defence_cache = {}
+        self._forcing_cache = {}
+        self.last_tt_hits = 0
+        self.last_rank_hits = 0
+        self.last_move_score_hits = 0
+        self.last_winning_hits = 0
+        self.last_line_hits = 0
+        self.last_make_calls = 0
+        self._turns = 0
+        self.last_budget_seconds = 0.0
+        self.last_important = False
+        self.last_return_reason = "not_started"
+        self.last_capture_checks = 0
+        self.last_capture_hits = 0
+        self.last_pending_capture_threats = 0
+        self.last_priority_extra = 0
+
+    def take_turn(self, board, time):
+        started = perf_counter()
+        self._turns += 1
+        self.last_depth = 0
+        self.last_nodes = 0
+        self.last_qnodes = 0
+        self.last_extension = 0
+        self.last_tt_hits = 0
+        self.last_rank_hits = 0
+        self.last_move_score_hits = 0
+        self.last_winning_hits = 0
+        self.last_line_hits = 0
+        self.last_make_calls = 0
+        self.last_budget_seconds = 0.0
+        self.last_important = False
+        self.last_return_reason = "fallback"
+        self.last_capture_checks = 0
+        self.last_capture_hits = 0
+        self.last_pending_capture_threats = 0
+        self.last_line_updates = 0
+        self.last_prevention_calls = 0
+        self.last_priority_extra = 0
+        self._grid = [WALL] * (STRIDE * STRIDE)
+        self.last_pv_hits = 0
+        self.last_pvs_researches = 0
+        for values in self._history:
+            for p in CELLS:
+                values[p] //= 2
+        for r in range(SIZE):
+            for c in range(SIZE):
+                self._grid[(r + 1) * STRIDE + c + 1] = int(board[r][c])
+        empty = [p for p in CELLS if self._grid[p] == EMPTY]
+        if not empty:
+            raise ValueError("No legal move: the board is full.")
+        if len(empty) == SIZE * SIZE:
+            self.last_return_reason = "opening"
+            return SIZE // 2, SIZE // 2
+
+        candidates = self._candidates()
+        best = min(candidates, key=self._centre_distance)
+        remaining = float(time) / 1000 if time != -1 else None
+        if remaining is not None and remaining <= 0.015:
+            self.last_return_reason = "low_time"
+            return self._coordinates(best)
+        self.last_budget_seconds = self._turn_budget(remaining, False)
+        self._deadline = started + self.last_budget_seconds
+
+        try:
+            wins, draws, threats = self._tactical_state(self.color)
+            if wins:
+                self.last_return_reason = "immediate_win"
+                return self._coordinates(wins[0])
+            if threats:
+                safe = self._defending_moves(self.color)
+                if safe:
+                    # Keep a legal defence if later ranking runs out of time.
+                    best = safe[0]
+                if len(safe) == 1:
+                    self.last_return_reason = "only_safe_response"
+                    return self._coordinates(best)
+                self.last_important = True
+                self.last_budget_seconds = self._turn_budget(remaining, True)
+                self._deadline = started + self.last_budget_seconds
+            ranked = self._rank_moves(self.color)
+            if ranked:
+                best = ranked[0][1]
+            if ranked and ranked[0][0] >= MATE:
+                self.last_return_reason = "immediate_win"
+                return self._coordinates(best)
+            self.last_important = self._important_position(ranked, threats)
+            self.last_budget_seconds = self._turn_budget(remaining, self.last_important)
+            # Classification and ranking are part of this turn's total budget.
+            self._deadline = started + self.last_budget_seconds
+            self.last_return_reason = "search"
+            for depth in range(1, MAX_DEPTH + 1):
+                # Compare root candidates cheaply before extending tactical lines.
+                # At zero extension, immediate wins and safe defences still run.
+                self._q_depth = 0 if depth == 1 else QUIESCENCE_DEPTH
+                selected = self._select_moves(ranked, self.color, ROOT_WIDTH)
+                ordered = self._order_moves(selected, self.color, 0, best)
+                depth_best, depth_score = best, -2 * MATE
+                alpha = -2 * MATE
+                for number, (_, move) in enumerate(ordered):
+                    self._check_time()
+                    captured = self._make_move(move, self.color)
+                    try:
+                        outcome = self._outcome(move, self.color, captured)
+                        if outcome is not None:
+                            score = outcome * MATE
+                        else:
+                            counter = self._capture_counter_reply(move, self.color, captured) if captured and self._q_depth else None
+                            if counter:
+                                score = -MATE + counter[1]
+                            elif number == 0 or depth == 1:
+                                score = -self._search(1 - self.color, depth - 1, -2 * MATE, -alpha, 1)
+                            else:
+                                score = -self._search(1 - self.color, depth - 1, -alpha - 1, -alpha, 1)
+                                if score > alpha:
+                                    self.last_pvs_researches += 1
+                                    score = -self._search(1 - self.color, depth - 1, -2 * MATE, -alpha, 1)
+                    finally:
+                        self._undo_move(move, self.color, captured)
+                    if score > depth_score:
+                        depth_best, depth_score = move, score
+                        if depth == 1:
+                            best = depth_best
+                    alpha = max(alpha, score)
+                    if depth == 1 and score > MATE - 1000:
+                        self.last_depth = 1
+                        return self._coordinates(move)
+                best = depth_best
+                self.last_depth = depth
+                self._remember(self._best_moves, self._position_key(self.color), best)
+        except TimeoutError:
+            self.last_return_reason = "timeout"
+        finally:
+            self._q_depth = QUIESCENCE_DEPTH
+        return self._coordinates(best)
+
+    def _turn_budget(self, remaining, important):
+        expected_turns = max(12, 28 - self._turns // 3)
+        average = 2.0 if remaining is None else remaining / expected_turns
+        budget = min(2.8, 1.4 * average) if important else min(1.0, average)
+        if remaining is not None:
+            budget = min(budget, max(0.0, remaining - 0.02))
+        return max(0.0, budget)
+
+    def _important_position(self, ranked, threats):
+        if threats or self._forcing_cache.get(self._position_key(self.color)):
+            return True
+        if ranked and ranked[0][0] >= 5_000:
+            return True
+        return bool(self._capture_moves(self.color) or self._capture_moves(1 - self.color))
+
+    def _search(self, color, depth, alpha, beta, ply):
+        self._check_time()
+        self._ensure_position()
+        self.last_nodes += 1
+        # First-pass values must never replace deeper tactical-search values.
+        key = (self._position_key(color), depth, ply, self._q_depth)
+        cached = self._search_cache.get(key)
+        if cached is not None:
+            value, flag = cached
+            if flag == 0 or flag == 1 and value >= beta or flag == -1 and value <= alpha:
+                self.last_tt_hits += 1
+                return value
+        value = self._search_uncached(color, depth, alpha, beta, ply)
+        self._remember(self._search_cache, key, (value, self._bound(value, alpha, beta)))
+        return value
+
+    def _search_uncached(self, color, depth, alpha, beta, ply):
+        if self._empty_count == 0:
+            return 0
+        if depth == 0:
+            return self._quiescence(color, alpha, beta, ply, self._q_depth)
+        wins, draws, threats = self._tactical_state(color)
+        if wins:
+            return MATE - ply
+        if threats and not self._defending_moves(color):
+            return -MATE + ply + 1
+        moves = self._rank_moves(color)
+        if moves[0][0] >= MATE:
+            return MATE - ply
+        best, best_move = -2 * MATE, None
+        selected = self._order_moves(self._select_moves(moves, color, INNER_WIDTH), color, ply)
+        for number, (_, move) in enumerate(selected):
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome is not None:
+                    score = outcome * (MATE - ply)
+                else:
+                    counter = self._capture_counter_reply(move, color, captured) if captured and self._q_depth else None
+                    if counter:
+                        score = -MATE + ply + counter[1]
+                    elif number == 0 or depth == 1:
+                        score = -self._search(1 - color, depth - 1, -beta, -alpha, ply + 1)
+                    else:
+                        score = -self._search(1 - color, depth - 1, -alpha - 1, -alpha, ply + 1)
+                        if alpha < score < beta:
+                            self.last_pvs_researches += 1
+                            score = -self._search(1 - color, depth - 1, -beta, -alpha, ply + 1)
+            finally:
+                self._undo_move(move, color, captured)
+            if score > best:
+                best, best_move = score, move
+            alpha = max(alpha, score)
+            if alpha >= beta:
+                self._history[color][move] += depth * depth
+                previous = self._killers.get(ply, ())
+                self._killers[ply] = (move,) + tuple(p for p in previous if p != move)[:1]
+                break
+        if best_move is not None:
+            self._remember(self._best_moves, self._position_key(color), best_move)
+        return best
+
+    def _order_moves(self, moves, color, ply, preferred=None):
+        if preferred is None:
+            preferred = self._best_moves.get(self._position_key(color))
+        if any(p == preferred for _, p in moves):
+            self.last_pv_hits += 1
+        killers = self._killers.get(ply, ())
+        history = self._history[color]
+        return sorted(moves, key=lambda item: (item[1] == preferred,
+                      item[1] in killers, min(history[item[1]], 2000)), reverse=True)
+
+    def _rank_moves(self, color):
+        self._check_time()
+        key = self._position_key(color)
+        cached = self._rank_cache.get(key)
+        if cached is not None:
+            self.last_rank_hits += 1
+            ranked, forcing = cached
+            self._remember(self._forcing_cache, key, forcing)
+            return list(ranked)
+        wins, draws, threats = self._tactical_state(color)
+        if wins:
+            ranked = [(MATE, move) for move in wins]
+            self._remember(self._rank_cache, key, (tuple(ranked), ()))
+            return ranked
+        candidates = self._candidates()
+        if threats:
+            candidates = self._defending_moves(color) or candidates
+        ranked = self._score_moves(candidates, color)
+        self._remember(self._rank_cache, key, (tuple(ranked), self._forcing_cache[key]))
+        return ranked
+
+    def _score_moves(self, candidates, color):
+        opponent = 1 - color
+        result, forcing = [], []
+        key = self._position_key(color)
+        scored = self._move_score_cache.get(key)
+        if scored is None:
+            scored = {}
+            self._remember(self._move_score_cache, key, scored)
+        own_captures = self._capture_moves(color)
+        enemy_captures = self._capture_moves(opponent)
+        self._sync_evaluation()
+        own_heat = tuple(self._feature_heat[color])
+        enemy_heat = tuple(self._feature_heat[opponent])
+        own_setups = tuple(self._feature_setups[color])
+        enemy_setups = tuple(self._feature_setups[opponent])
+        for move in candidates:
+            self._check_time()
+            cached = scored.get(move)
+            if cached is not None:
+                self.last_move_score_hits += 1
+                score, is_forcing = cached
+                result.append((score, move))
+                if is_forcing:
+                    forcing.append(move)
+                continue
+            is_forcing = False
+            if move in own_captures:
+                captured = self._make_move(move, color)
+                try:
+                    outcome = self._outcome(move, color, captured)
+                    local = self._local_score(move, color)
+                    attack = local + 600 * len(captured) - 900 * self._vulnerable_pairs(move, color)
+                    is_forcing = outcome == 0 or outcome is None and bool(self._winning_options(color)[0])
+                finally:
+                    self._undo_move(move, color, captured)
+            else:
+                # Pure local scores need no search-state or line-state mutation.
+                self._grid[move] = color
+                try:
+                    outcome = self._outcome(move, color, ())
+                    local = self._local_score(move, color)
+                    attack = local - 900 * self._vulnerable_pairs(move, color)
+                finally:
+                    self._grid[move] = EMPTY
+                if outcome == 0:
+                    is_forcing = True
+                elif outcome is None and local >= 8_000:
+                    captured = self._make_move(move, color)
+                    try:
+                        is_forcing = bool(self._winning_options(color)[0])
+                    finally:
+                        self._undo_move(move, color, captured)
+            defence_capture = 0
+            if move in enemy_captures:
+                for direction in DIRECTIONS:
+                    end = move + 3 * direction
+                    if 0 <= end < len(self._grid) and self._grid[end] == opponent:
+                        if self._grid[move + direction] == self._grid[move + 2 * direction] == color:
+                            defence_capture += 1_200
+            score = 10 * own_heat[move] + 9 * enemy_heat[move]
+            score += attack - local + 0.95 * defence_capture
+            score += FORK_MOVE_BONUS * min(max(0, own_setups[move] - 1), 3)
+            score += 0.95 * FORK_MOVE_BONUS * min(max(0, enemy_setups[move] - 1), 3)
+            score -= self._centre_distance(move) * 0.1
+            # Pattern estimates must never masquerade as a proven terminal result.
+            score = max(-MATE // 2, min(MATE // 2, score))
+            if outcome == -1:
+                score = -MATE
+            elif outcome == 0:
+                score = -50
+            elif outcome == 1:
+                score = MATE
+            scored[move] = score, is_forcing
+            if is_forcing:
+                forcing.append(move)
+            result.append((score, move))
+        self._remember(self._forcing_cache, key, tuple(forcing))
+        return sorted(result, reverse=True)
+
+    def _select_moves(self, ranked, color, width):
+        if self._tactical_state(color)[2]:
+            return ranked
+        if width == INNER_WIDTH and len(self._move_stack) == 1:
+            width = REPLY_WIDTH
+        forcing = set(self._forcing_cache.get(self._position_key(color), ()))
+        selected = list(ranked[:width])
+        selected.extend(item for item in ranked[width:] if item[1] in forcing)
+        self._sync_evaluation()
+        included = {move for score, move in selected}
+        preferred = self._selection_hints.get(self._position_key(color))
+        extras = []
+        if preferred not in included:
+            hint = next((item for item in ranked if item[1] == preferred), None)
+            if hint is not None:
+                extras.append(hint)
+                included.add(preferred)
+        for item in ranked[width:]:
+            move = item[1]
+            if move in included:
+                continue
+            if (self._feature_setups[color][move] >= 2 or self._feature_setups[1 - color][move] >= 2
+                    or self._feature_heat[color][move] >= 5_000 or self._feature_heat[1 - color][move] >= 5_000):
+                extras.append(item)
+                included.add(move)
+                if len(extras) >= PRIORITY_EXTRA_LIMIT:
+                    break
+        selected.extend(extras[:PRIORITY_EXTRA_LIMIT])
+        self.last_priority_extra += min(len(extras), PRIORITY_EXTRA_LIMIT)
+        return selected
+
+    def _position_key(self, color):
+        self._ensure_position()
+        if self._board_key is None:
+            self._board_key = bytes(self._state)
+        return color, self._board_key
+
+    def _potential_wins(self, color):
+        key = self._position_key(color)
+        cached = self._potential_cache.get(key)
+        if cached is not None:
+            return cached
+        self._sync_tactical_lines()
+        result = tuple(sorted(self._line_counts[0][color]))
+        self._remember(self._potential_cache, key, result)
+        return result
+
+    def _winning_options(self, color):
+        self._check_time()
+        key = self._position_key(color)
+        cached = self._winning_cache.get(key)
+        if cached is not None:
+            self.last_winning_hits += 1
+            return cached
+        wins, draws = [], []
+        candidates = self._potential_wins(color)
+        captures = self._capture_moves(color) if candidates else set()
+        for move in candidates:
+            self._check_time()
+            if move not in captures:
+                self._grid[move] = color
+                try:
+                    if self._exact_five_at(move, color):
+                        wins.append(move)
+                finally:
+                    self._grid[move] = EMPTY
+                continue
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome == 1:
+                    wins.append(move)
+                elif outcome == 0:
+                    draws.append(move)
+            finally:
+                self._undo_move(move, color, captured)
+        result = tuple(wins), tuple(draws)
+        self._remember(self._winning_cache, key, result)
+        return result
+
+    def _tactical_state(self, color):
+        self._check_time()
+        key = self._position_key(color)
+        if key not in self._tactical_cache:
+            wins, draws = self._winning_options(color)
+            threats = self._winning_options(1 - color)[0]
+            self._remember(self._tactical_cache, key, (wins, draws, threats))
+        return self._tactical_cache[key]
+
+    def _defending_moves(self, color):
+        key = self._position_key(color)
+        if key in self._defence_cache:
+            return self._defence_cache[key]
+        safe = []
+        for move in self._defence_candidates(color):
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome in (0, 1):
+                    safe.append(move)
+                elif outcome is None and not self._winning_options(1 - color)[0]:
+                    safe.append(move)
+            finally:
+                self._undo_move(move, color, captured)
+        self._remember(self._defence_cache, key, tuple(safe))
+        return self._defence_cache[key]
+
+    def _capture_moves(self, color):
+        self._ensure_position()
+        self._sync_tactical_lines()
+        return set(self._line_counts[1][color])
+
+    def _defence_candidates(self, color):
+        opponent = 1 - color
+        threats = self._winning_options(opponent)[0]
+        if not threats:
+            return self._candidates()
+        # A safe move must also answer this particular winning move.
+        threat = threats[0]
+        relevant = {threat}
+        relevant.update(self._potential_wins(color))
+        relevant.update(self._capture_moves(color))
+        grid, captures = self._grid, False
+        for direction in DIRECTIONS:
+            self._check_time()
+            first, second, end = (threat + k * direction for k in (1, 2, 3))
+            if not (0 <= end < len(grid)) or grid[end] != opponent:
+                continue
+            if grid[first] == grid[second] == color:
+                captures = True
+            elif grid[first] == color and grid[second] == EMPTY:
+                # Supplying a capturable stone can trim our overline to five.
+                relevant.add(second)
+            elif grid[first] == EMPTY and grid[second] == color:
+                relevant.add(first)
+        if captures:
+            captured = self._make_move(threat, opponent)
+            try:
+                # A quiet move can complete our five AFTER the enemy capture.
+                relevant.update(self._potential_wins(color))
+            finally:
+                self._undo_move(threat, opponent, captured)
+        # Preserve the original radius-two scope and ascending move order.
+        # _defending_moves still checks every opposing winning reply exactly.
+        return [move for move in self._candidates() if move in relevant]
+
+    def _forcing_candidates(self, color):
+        self._sync_tactical_lines()
+        grid = self._grid
+        near = set(self._line_counts[3][color]) | set(self._line_counts[1][color])
+        for move in self._potential_wins(color):
+            for direction in DIRECTIONS:
+                end = move + 3 * direction
+                if 0 <= end < len(grid) and grid[end] == EMPTY:
+                    if grid[move + direction] == grid[move + 2 * direction] == 1 - color:
+                        near.add(end)
+        return tuple(sorted(near))
+
+    def _forcing_moves(self, color):
+        key = self._position_key(color)
+        if key in self._forcing_cache:
+            return self._score_moves(self._forcing_cache[key], color)
+        forcing = []
+        for move in self._forcing_candidates(color):
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome == 0 or outcome == 1:
+                    forcing.append(move)
+                elif outcome is None and self._winning_options(color)[0]:
+                    forcing.append(move)
+            finally:
+                self._undo_move(move, color, captured)
+        return self._score_moves(forcing, color)
+
+    def _capture_counter_reply(self, move, color, captured):
+        if not captured:
+            return None
+        key = (self._position_key(color), move, tuple(sorted(captured)))
+        if key in self._capture_reply_cache:
+            self.last_capture_hits += 1
+            return self._capture_reply_cache[key]
+        opponent, grid = 1 - color, self._grid
+        wins = self._winning_options(opponent)[0]
+        if wins:
+            result = (wins[0], 1)
+            self._remember(self._capture_reply_cache, key, result)
+            return result
+        replies = {p for p in captured if grid[p] == EMPTY}
+        # A new counter-capture either uses a vacated point or takes the new stone.
+        for direction in DIRECTIONS:
+            self._check_time()
+            neighbor, before, after = move + direction, move - direction, move + 2 * direction
+            if 0 <= before < len(grid) and 0 <= after < len(grid) and grid[neighbor] == color:
+                if {grid[before], grid[after]} == {opponent, EMPTY}:
+                    replies.add(before if grid[before] == EMPTY else after)
+        for reply in sorted(replies):
+            self._check_time()
+            self.last_capture_checks += 1
+            taken = self._make_move(reply, opponent)
+            try:
+                outcome = self._outcome(reply, opponent, taken)
+                distance = 1 if outcome == 1 else None
+                if outcome is None and (taken or self._local_score(reply, opponent) >= 8_000) and self._winning_options(opponent)[0]:
+                    if not self._defending_moves(color):
+                        distance = 3
+            finally:
+                self._undo_move(reply, opponent, taken)
+            if distance is not None:
+                result = (reply, distance)
+                self._remember(self._capture_reply_cache, key, result)
+                return result
+        self._remember(self._capture_reply_cache, key, None)
+        return None
+
+    def _capture_attack_candidates(self, color):
+        self._sync_tactical_lines()
+        candidates = set(self._line_counts[1][color]) | set(self._line_counts[0][color]) | set(self._line_counts[2][color])
+        return tuple(sorted(candidates))
+
+    def _selective_capture_attacks(self, color, ply):
+        if ply > PREVENTION_MAX_PLY:
+            return ()
+        self._sync_tactical_lines()
+        exposures = self._line_counts[2][color]
+        threes = self._line_counts[3][color]
+        if not self._line_counts[1][color] and not any(p in threes for p in exposures):
+            return ()
+        self.last_prevention_calls += 1
+        return self._capture_attack_moves(color)
+
+    def _capture_attack_moves(self, color):
+        key = self._position_key(color)
+        if key in self._capture_attack_cache:
+            self.last_capture_hits += 1
+            return self._capture_attack_cache[key]
+        if len(self._stones[color]) < 3:
+            self._remember(self._capture_attack_cache, key, ())
+            return ()
+        attacks = []
+        for move in self._capture_attack_candidates(color):
+            self._check_time()
+            taken = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, taken)
+                if outcome == 1:
+                    attacks.append((MATE, move))
+                elif outcome is None:
+                    local = self._local_score(move, color)
+                    if taken or local >= 8_000:
+                        attacks.append((local, move))
+            finally:
+                self._undo_move(move, color, taken)
+        proved = []
+        for _, move in sorted(attacks, reverse=True)[:CAPTURE_ATTACK_WIDTH]:
+            self._check_time()
+            taken = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, taken)
+                if outcome == 1:
+                    proved.append((move, 0))
+                    continue
+                if not self._winning_options(color)[0]:
+                    continue
+                safe = self._defending_moves(1 - color)
+                if not safe:
+                    proved.append((move, 2))
+                    continue
+                if len(safe) > CAPTURE_DEFENCE_LIMIT:
+                    continue
+                distance = 0
+                for defence in safe:
+                    captured = self._make_move(defence, 1 - color)
+                    try:
+                        result = self._outcome(defence, 1 - color, captured)
+                        counter = self._capture_counter_reply(defence, 1 - color, captured) if result is None and captured else None
+                    finally:
+                        self._undo_move(defence, 1 - color, captured)
+                    if counter is None:
+                        break
+                    distance = max(distance, 1 + counter[1])
+                else:
+                    proved.append((move, distance))
+            finally:
+                self._undo_move(move, color, taken)
+        result = tuple(proved)
+        self._remember(self._capture_attack_cache, key, result)
+        return result
+
+    def _quiescence(self, color, alpha, beta, ply, remaining):
+        self._check_time()
+        self._ensure_position()
+        self.last_qnodes += 1
+        self.last_extension = max(self.last_extension, self._q_depth - remaining)
+        key = (self._position_key(color), remaining, ply)
+        cached = self._q_cache.get(key)
+        if cached is not None:
+            value, flag = cached
+            if flag == 0 or flag == 1 and value >= beta or flag == -1 and value <= alpha:
+                self.last_tt_hits += 1
+                return value
+        value = self._quiescence_uncached(color, alpha, beta, ply, remaining)
+        self._remember(self._q_cache, key, (value, self._bound(value, alpha, beta)))
+        return value
+
+    def _quiescence_uncached(self, color, alpha, beta, ply, remaining):
+        if self._empty_count == 0:
+            return 0
+        wins, draws, threats = self._tactical_state(color)
+        if wins:
+            return MATE - ply
+        if threats:
+            safe = self._defending_moves(color)
+            if not safe:
+                return -MATE + ply + 1
+            if remaining == 0:
+                score = self._evaluate(color)
+                return max(score, 0) if draws else score
+            moves = self._score_moves(safe, color)
+            best = -2 * MATE
+        else:
+            best = self._evaluate(color)
+            if draws:
+                best = max(best, 0)
+            if remaining == 0:
+                return best
+            attacks = self._selective_capture_attacks(color, ply)
+            if attacks:
+                return MATE - ply - min(distance for move, distance in attacks)
+            pending = self._selective_capture_attacks(1 - color, ply) if remaining >= 2 else ()
+            if pending:
+                self.last_pending_capture_threats += 1
+                # Compare preventive moves now, before the enemy attack is played.
+                ranked = self._rank_moves(color)
+                moves = self._select_moves(ranked, color, INNER_WIDTH)
+                included = {move for score, move in moves}
+                relevant = {move for move, distance in pending} | self._capture_moves(color)
+                moves.extend(item for item in ranked if item[1] in relevant and item[1] not in included)
+                best = 0 if draws else -2 * MATE
+            else:
+                if best >= beta:
+                    return best
+                alpha = max(alpha, best)
+                moves = self._forcing_moves(color)[:FORCING_WIDTH]
+        for _, move in moves:
+            self._check_time()
+            captured = self._make_move(move, color)
+            try:
+                outcome = self._outcome(move, color, captured)
+                if outcome is not None:
+                    score = outcome * (MATE - ply)
+                else:
+                    counter = self._capture_counter_reply(move, color, captured) if captured else None
+                    score = -MATE + ply + counter[1] if counter else -self._quiescence(1 - color, -beta, -alpha, ply + 1, remaining - 1)
+            finally:
+                self._undo_move(move, color, captured)
+            best = max(best, score)
+            alpha = max(alpha, score)
+            if alpha >= beta:
+                break
+        return best
+
+    def _candidates(self):
+        key = self._position_key(0)[1]
+        cached = self._candidate_cache.get(key)
+        if cached is None:
+            near = {q for side in self._stones for p in side for q in self._neighbors[p]
+                    if self._grid[q] == EMPTY}
+            cached = tuple(sorted(near)) or tuple(p for p in CELLS if self._grid[p] == EMPTY)
+            self._remember(self._candidate_cache, key, cached)
+        return list(cached)
+
+    def _make_move(self, move, color):
+        self._ensure_position()
+        previous_key = self._board_key
+        self.last_make_calls += 1
+        grid = self._grid
+        grid[move] = color
+        opponent = 1 - color
+        captured = []
+        for direction in DIRECTIONS:
+            a, b, end = move + direction, move + 2 * direction, move + 3 * direction
+            if 0 <= end < len(grid) and grid[a] == opponent and grid[b] == opponent and grid[end] == color:
+                captured.extend((a, b))
+        for p in captured:
+            grid[p] = EMPTY
+        self._stones[color].add(move)
+        self._state[move] = color + 1
+        for p in captured:
+            self._stones[1 - color].remove(p)
+            self._state[p] = 0
+        self._empty_count += len(captured) - 1
+        self._board_key = None
+        self._move_stack.append(previous_key)
+        self._toggle_line_cell(move, color + 1)
+        for p in captured:
+            self._toggle_line_cell(p, opponent + 1)
+        return captured
+
+    def _undo_move(self, move, color, captured):
+        self._board_key = self._move_stack.pop()
+        self._grid[move] = EMPTY
+        self._state[move] = 0
+        self._stones[color].remove(move)
+        self._empty_count += 1 - len(captured)
+        for p in captured:
+            self._grid[p] = 1 - color
+            self._state[p] = 2 - color
+            self._stones[1 - color].add(p)
+        self._toggle_line_cell(move, color + 1)
+        for p in captured:
+            self._toggle_line_cell(p, 2 - color)
+
+    def _exact_five_at(self, move, color):
+        if self._grid[move] != color:
+            return False
+        for axis in AXES:
+            length = 1
+            for direction in (axis, -axis):
+                p = move + direction
+                while 0 <= p < len(self._grid) and self._grid[p] == color:
+                    length += 1
+                    p += direction
+            if length == 5:
+                return True
+        return False
+
+    def _outcome(self, move, color, captured):
+        mine = self._exact_five_at(move, color)
+        opponent = 1 - color
+        theirs = False
+        for removed in captured:
+            for direction in DIRECTIONS:
+                p = removed + direction
+                if 0 <= p < len(self._grid) and self._grid[p] == opponent:
+                    if self._exact_five_at(p, opponent):
+                        theirs = True
+                        break
+            if theirs:
+                break
+        if mine and theirs:
+            return 0
+        if mine:
+            return 1
+        if theirs:
+            return -1
+        return None
+
+    def _local_score(self, move, color):
+        grid = self._grid
+        total = 0
+        for axis in AXES:
+            length, open_ends = 1, 0
+            for direction in (axis, -axis):
+                p = move + direction
+                while 0 <= p < len(grid) and grid[p] == color:
+                    length += 1
+                    p += direction
+                if 0 <= p < len(grid) and grid[p] == EMPTY:
+                    open_ends += 1
+            if length == 4:
+                total += 45_000 if open_ends == 2 else 6_000 if open_ends else 0
+            elif length == 3:
+                total += 3_000 if open_ends == 2 else 250 if open_ends else 0
+            elif length == 2:
+                total += 120 if open_ends == 2 else 20 if open_ends else 0
+            for offset in range(5):
+                start = move - offset * axis
+                end = start + 4 * axis
+                if not (0 <= start < len(grid) and 0 <= end < len(grid)):
+                    continue
+                cells = [grid[start + i * axis] for i in range(5)]
+                if any(value not in (EMPTY, color) for value in cells):
+                    continue
+                before, after = start - axis, end + axis
+                if 0 <= before < len(grid) and grid[before] == color:
+                    continue
+                if 0 <= after < len(grid) and grid[after] == color:
+                    continue
+                total += WINDOW_WEIGHTS[cells.count(color)]
+        return total
+
+    def _vulnerable_pairs(self, move, color):
+        count, grid = 0, self._grid
+        for direction in DIRECTIONS:
+            a, before, after = move + direction, move - direction, move + 2 * direction
+            if not (0 <= before < len(grid) and 0 <= after < len(grid)):
+                continue
+            if grid[a] == color and {grid[before], grid[after]} == {1 - color, EMPTY}:
+                count += 1
+        return count
+
+    def _evaluate(self, color):
+        key = self._position_key(0)[1]
+        total = self._eval_cache.get(key)
+        if total is None:
+            self._sync_evaluation()
+            bonus = [MULTIPLE_THREAT_BONUS * min(max(0, n - 1), 3) for n in self._strong_threes]
+            total = self._eval_total + bonus[0] - bonus[1]
+            total = max(-MATE // 4, min(MATE // 4, total))
+            self._remember(self._eval_cache, key, total)
+        return total if color == 0 else -total
+
+    def _sync_evaluation(self):
+        for lid in tuple(self._score_dirty):
+            self._check_time()
+            code = self._line_codes[lid]
+            values = self._decode_line(lid, code)
+            info = self._line_cache.get(values)
+            if info is None:
+                info = self._line_features_for(values)
+                self._remember(self._line_cache, values, info, LINE_CACHE_LIMIT)
+            else:
+                self.last_line_hits += 1
+            old = self._line_features[lid]
+            for color in (0, 1):
+                previous = old[color] if old is not None else None
+                self._strong_threes[color] += info[color][2] - (previous[2] if previous else 0)
+                heat, setups = self._feature_heat[color], self._feature_setups[color]
+                for offset, p in enumerate(self._lines[lid]):
+                    heat[p] += info[color][1][offset] - (previous[1][offset] if previous else 0)
+                    setups[p] += info[color][3][offset] - (previous[3][offset] if previous else 0)
+            score = info[0][0] - info[1][0]
+            self._eval_total += score - self._line_scores[lid]
+            self._line_scores[lid] = score
+            self._line_features[lid] = info
+            self._score_codes[lid] = code
+            self._score_dirty.discard(lid)
+            self.last_line_updates += 1
+
+    @staticmethod
+    def _bound(value, alpha, beta):
+        return -1 if value <= alpha else 1 if value >= beta else 0
+
+    @staticmethod
+    def _remember(cache, key, value, limit=POSITION_CACHE_LIMIT):
+        if key not in cache and len(cache) >= limit:
+            if isinstance(cache, OrderedDict):
+                cache.popitem(last=False)
+            else:
+                cache.pop(next(iter(cache)))
+        cache[key] = value
+
+    def _ensure_position(self):
+        if self._indexed_grid is self._grid:
+            return
+        previous_state = getattr(self, '_state', None)
+        self._indexed_grid = self._grid
+        self._state = bytearray(value + 1 for value in self._grid)
+        self._board_key = None
+        self._stones = [{p for p in CELLS if self._grid[p] == color} for color in (0, 1)]
+        self._empty_count = SIZE * SIZE - sum(map(len, self._stones))
+        self._move_stack = []
+        self._killers = {}
+        # Freeze candidate membership within a turn; live hints still improve ordering.
+        self._selection_hints = dict(self._best_moves)
+        if previous_state is None:
+            self._line_codes = [0] * len(self._lines)
+            for color, stones in enumerate(self._stones):
+                for p in stones:
+                    for lid, shift in self._memberships[p]:
+                        self._line_codes[lid] ^= (color + 1) << shift
+            self._score_codes = [0] * len(self._lines)
+            self._tactic_codes = [0] * len(self._lines)
+            self._line_scores = [0] * len(self._lines)
+            self._line_features = [None] * len(self._lines)
+            self._strong_threes = [0, 0]
+            self._feature_heat = [[0] * (STRIDE * STRIDE) for _ in range(2)]
+            self._feature_setups = [[0] * (STRIDE * STRIDE) for _ in range(2)]
+            self._eval_total = 0
+            self._score_dirty = {lid for lid, code in enumerate(self._line_codes) if code}
+            self._tactic_dirty = set(self._score_dirty)
+            self._line_tactics = [((),) * 8 for _ in self._lines]
+            self._line_counts = [[{}, {}] for _ in range(4)]
+        else:
+            for p in CELLS:
+                difference = previous_state[p] ^ self._state[p]
+                if difference:
+                    self._toggle_line_cell(p, difference)
+        for name in ('_tactical_cache', '_defence_cache', '_forcing_cache',
+                     '_winning_cache', '_potential_cache', '_rank_cache', '_move_score_cache',
+                     '_candidate_cache', '_search_cache', '_q_cache', '_eval_cache',
+                     '_capture_reply_cache', '_capture_attack_cache'):
+            setattr(self, name, OrderedDict())
+
+    def _toggle_line_cell(self, p, value):
+        for lid, shift in self._memberships[p]:
+            code = self._line_codes[lid] ^ (value << shift)
+            self._line_codes[lid] = code
+            if code == self._score_codes[lid]:
+                self._score_dirty.discard(lid)
+            else:
+                self._score_dirty.add(lid)
+            if code == self._tactic_codes[lid]:
+                self._tactic_dirty.discard(lid)
+            else:
+                self._tactic_dirty.add(lid)
+
+    def _decode_line(self, lid, code):
+        return tuple(((code >> (2 * i)) & 3) - 1 for i in range(len(self._lines[lid])))
+
+    def _sync_tactical_lines(self):
+        for lid in tuple(self._tactic_dirty):
+            self._check_time()
+            line, code = self._lines[lid], self._line_codes[lid]
+            key = (len(line), code)
+            info = self._line_tactic_cache.get(key)
+            if info is None:
+                info = self._line_tactics_for(self._decode_line(lid, code))
+                self._remember(self._line_tactic_cache, key, info, LINE_CACHE_LIMIT)
+            old = self._line_tactics[lid]
+            for kind in range(4):
+                for color in (0, 1):
+                    index = 2 * kind + color
+                    counts = self._line_counts[kind][color]
+                    for offset in old[index]:
+                        p = line[offset]
+                        count = counts[p] - 1
+                        if count:
+                            counts[p] = count
+                        else:
+                            del counts[p]
+                    for offset in info[index]:
+                        p = line[offset]
+                        counts[p] = counts.get(p, 0) + 1
+            self._line_tactics[lid] = info
+            self._tactic_codes[lid] = code
+            self._tactic_dirty.discard(lid)
+
+    @staticmethod
+    def _line_tactics_for(values):
+        length = len(values)
+        result = [set() for _ in range(8)]
+        def at(index):
+            return values[index] if 0 <= index < length else WALL
+        for color in (0, 1):
+            i = 0
+            while i < length:
+                if values[i] != color:
+                    i += 1
+                    continue
+                start = i
+                while i < length and values[i] == color:
+                    i += 1
+                count = i - start
+                if count == 4:
+                    if at(start - 1) == EMPTY and at(start - 2) != color:
+                        result[color].add(start - 1)
+                    if at(i) == EMPTY and at(i + 1) != color:
+                        result[color].add(i)
+                elif count < 4 and at(i) == EMPTY:
+                    end = i + 1
+                    while at(end) == color:
+                        end += 1
+                    if count + end - i - 1 == 4:
+                        result[color].add(i)
+            for i in range(length - 3):
+                window = values[i:i + 4]
+                if window == (EMPTY, 1 - color, 1 - color, color):
+                    result[2 + color].add(i)
+                elif window == (color, 1 - color, 1 - color, EMPTY):
+                    result[2 + color].add(i + 3)
+                if window in ((EMPTY, color, EMPTY, 1 - color), (1 - color, color, EMPTY, EMPTY)):
+                    result[4 + color].add(i + 2)
+                if window in ((1 - color, EMPTY, color, EMPTY), (EMPTY, EMPTY, color, 1 - color)):
+                    result[4 + color].add(i + 1)
+            for i in range(length - 4):
+                window = values[i:i + 5]
+                if window.count(color) == 3 and window.count(EMPTY) == 2:
+                    result[6 + color].update(i + j for j, v in enumerate(window) if v == EMPTY)
+        return tuple(tuple(sorted(offsets)) for offsets in result)
+
+
+
+
+    @staticmethod
+    def _line_features_for(values):
+        length = len(values)
+        result = []
+        for color in (0, 1):
+            heat, setups = [0] * length, [0] * length
+            wins, threes, pairs = set(), {}, {}
+            score = values.count(color)
+            for start in range(length - 4):
+                end = start + 5
+                if start and values[start - 1] == color or end < length and values[end] == color:
+                    continue
+                window = values[start:end]
+                if any(v not in (EMPTY, color) for v in window):
+                    continue
+                stones = tuple(start + j for j, v in enumerate(window) if v == color)
+                count = len(stones)
+                if count == 0 or count == 5:
+                    continue
+                holes = tuple(start + j for j, v in enumerate(window) if v == EMPTY)
+                if count == 4:
+                    wins.update(holes)
+                    continue
+                for j in holes:
+                    heat[j] += (0, 3, 65, 1_100)[count]
+                groups = threes if count == 3 else pairs if count == 2 else None
+                if groups is not None:
+                    counts = groups.setdefault(stones, {})
+                    for j in holes:
+                        counts[j] = counts.get(j, 0) + 1
+            strong = 0
+            for counts in threes.values():
+                extensions = [j for j, count in counts.items() if count >= 2]
+                if extensions:
+                    strong += 1
+                    score += STRONG_THREE_SCORE + 500 * (len(extensions) - 1)
+                    for j in extensions:
+                        heat[j] += 5_000
+                else:
+                    score += 450
+            for counts in pairs.values():
+                # A shared hole preserves multiple exact-five windows after adding a third stone.
+                windows = sum(counts.values()) // 3
+                score += 35 + 15 * min(windows, 4)
+                for j, count in counts.items():
+                    if count >= 2:
+                        setups[j] += 1
+            if wins:
+                score += 14_000 if len(wins) == 1 else 140_000 + 10_000 * len(wins)
+                for j in wins:
+                    heat[j] += 300_000
+            captures = set()
+            for i in range(length - 3):
+                group = values[i:i + 4]
+                if group == (EMPTY, 1 - color, 1 - color, color):
+                    captures.add(i)
+                elif group == (color, 1 - color, 1 - color, EMPTY):
+                    captures.add(i + 3)
+                if group in ((1 - color, color, color, EMPTY), (EMPTY, color, color, 1 - color)):
+                    score -= 700
+            for j in captures:
+                heat[j] += 1_300
+            score += 150 * len(captures)
+            result.append((score, tuple(heat), strong, tuple(setups)))
+        return tuple(result)
+
+    def _score_line(self, values, color):
+        return self._line_features_for(values)[color][0]
+
+    def _build_lines(self):
+        lines = []
+        for axis in AXES:
+            for p in CELLS:
+                r, c = self._coordinates(p - axis)
+                if 0 <= r < SIZE and 0 <= c < SIZE:
+                    continue
+                line, q = [], p
+                while True:
+                    r, c = self._coordinates(q)
+                    if not (0 <= r < SIZE and 0 <= c < SIZE):
+                        break
+                    line.append(q)
+                    q += axis
+                if len(line) >= 4:
+                    lines.append(tuple(line))
+        return tuple(lines)
+
+    def _coordinates(self, move):
+        return move // STRIDE - 1, move % STRIDE - 1
+
+    def _centre_distance(self, move):
+        r, c = self._coordinates(move)
+        return abs(r - SIZE // 2) + abs(c - SIZE // 2)
+
+    def _check_time(self):
+        if perf_counter() >= self._deadline:
+            raise TimeoutError
+
+
+Omok++ GameAgent JangJinha v9 — 평가와 후보 선택 개선
+
+팀명: JangJinha
+팀원: 장진하 (개인 참가)
+
+실제 에이전트: omok-agent/playerJangJinha.py, omok-agent/smartplayerJangJinha.py
+v6 비교 기준은 verification/reference_v6/omok-agent에 원본 그대로 보존했습니다.
+v8 원본도 verification/reference_v8/omok-agent에 별도로 보존했습니다.
+
+변경
+1. 중간이 빈 3목과 연속 3목을 돌의 집합별로 묶어 중복을 줄입니다.
+   강한 3목이 여러 개 겹치면 추가 점수를 줍니다. 포획 위험도 유지합니다.
+2. 같은 줄 정보에서 공격·방어 후보 점수를 얻습니다. 한 수로 복수의 강한
+   3목을 만드는 자리와 상대의 그런 자리를 막는 후보에 우선순위를 줍니다.
+3. 기본 후보는 첫 선택 26개, 첫 상대 응수 16개, 더 깊은 단계 12개입니다.
+   중요한 후보와 이전 최선 수는 최대 4개 더 보존합니다. 강제 응수는 별도입니다.
+4. 후보를 보호하는 힌트는 실제 차례 시작에 고정합니다. 차례 중에 탐색 순서는
+   계속 개선하되 캐시 값의 기준이 되는 후보 구성은 일관되게 유지합니다.
+
+유지
+v8의 줄 인코딩, 바뀐 줄만 갱신, 가상 착수·포획 되돌리기, PVS 탐색,
+즉승·필수 응수, 포획 후 재공격 검사, 일반 깊이 6·전술 깊이 6을 유지합니다.
+시간 정책은 평소 최대 1초, 중요한 국면 최대 2.8초이며 남은 게임 시간에 맞춰
+줄어듭니다. 정확히 5목·쌍 포획·동시 5목 무승부 규칙은 그대로입니다.
+
+실행
+Python 3.9 이상, 표준 라이브러리만 사용합니다.
+압축 해제한 agent_JangJinha_v9 폴더에서 기존 오목 파일 폴더를 지정합니다.
+JangJinha(흑) vs SimplePlayer(백), 각자 경기 전체 누적 1분:
+python3 run_agent.py "/기존/오목/폴더" 3 2 1
+사람(흑) vs JangJinha(백), 외부 경기 시간 무제한:
+python3 run_agent.py "/기존/오목/폴더" 0 3 -1
+
+직접 연결
+omok-agent를 모듈 경로에 넣고 두 파일을 함께 사용합니다.
+from smartplayerJangJinha import SmartPlayerJangJinha
+agent = SmartPlayerJangJinha(0)
+row, col = agent.take_turn(board, remaining_ms)
+흑=0, 백=1, 빈칸=-1. 좌표는 0부터 시작하는 (행, 열)입니다.
+remaining_ms는 게임 전체 남은 시간(ms), -1은 외부 경기 시간 무제한입니다.
+
+검증과 비교
+python3 validate_v9.py
+python3 compare_v9.py timed
+python3 compare_v9.py fixed
+python3 compare_v9.py gamebudget
+검증 6종과 같은 8개 국면의 1초 비교 64회, 대표 국면의 고정 깊이 및 2.8초
+비교를 완료했습니다. 자세한 수치는 변경설명.md와 verification에 있습니다.
+이 비교는 전체 대전이 아닙니다. 새 실제 경기 승률은 아직 측정하지 않았습니다.
+이전 13수 대표 국면의 선택도 현재 검사에서 유지되었습니다.
+
+파일
+omok-agent/: 실제 v9 두 파일.
+verification/reference_v6/, reference_v8/: 변경하지 않은 비교 기준.
+verification/Geonwoo2/: 독립 평가 검증에 사용한 건우2 원본 두 파일.
+verification/inputs/: v6·v8 원본 압축 파일.
+verification/validation.json, test_logs/: 최종 검사 결과와 실행 기록.
+verification/v9_*_comparison.json: 최종 코드 해시가 연결된 국면 비교.
+verification/prototype_narrow/, prior_hint_policy/: 개발 단계 기록, 최종 v9가 아닙니다.
+llm-usage/: 이전 기록과 이번 요청·변경 요약.
+
+AI 사용과 참고
+ChatGPT(Codex)의 도움으로 코드·검증·설명을 작성했습니다.
+건우2의 돌 집합별 위협 평가와 후보 점수를 참고해 JangJinha의 줄 인코딩·검색
+구조에 통합했습니다. 기준 버전과 건우2 소스는 수정하지 않았습니다.

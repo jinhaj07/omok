@@ -9,7 +9,7 @@ from simpleplayer import SimplePlayer
 import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "omok-agent"))
-from smartplayerjinhajang import SmartPlayerJinhaJang
+from smartplayerJangJinha import SmartPlayerJangJinha
 
 
 class GameManager:
@@ -30,7 +30,7 @@ class GameManager:
         elif player == 2:
             return SimplePlayer(color)
         elif player == 3:
-            return SmartPlayerJinhaJang(color)
+            return SmartPlayerJangJinha(color)
         else:
             raise ValueError("Invalid player code")
         

@@ -5,7 +5,7 @@
 ## 구조
 | 경로 | 내용 | 제출 여부 |
 |---|---|---|
-| `omok-agent/` | `SmartPlayerJinhaJang`, `PlayerJinhaJang` — 제출할 에이전트 | 제출 |
+| `omok-agent/` | `SmartPlayerJangJinha`, `PlayerJangJinha` — 제출할 에이전트 | 제출 |
 | `omok-game/` | Part 1 게임 인프라(JRM) 사본 + 플레이어 코드 `3` 연결 | 로컬 테스트용 |
 | `tests/` | 규칙·엔진 단위 테스트 (인프라 `Board`와 랜덤 대국 교차검증 포함) | 개발용 |
 | `tools/arena.py` | 헤드리스 대국기 (병렬, 시간·크래시·불법수 집계) | 개발용 |
@@ -30,7 +30,7 @@ cd omok-game && python3 omok.py 0 3 1                  # 사람(흑) vs 에이�
   클래스 이름이 `SmartPlayer`로 시작하면 자동 인식. 서로 `player.py` 등 파일 이름이 겹쳐도 격리해서 불러온다.
 - 리그전 (과제 최종 단계와 같은 방식: 쌍마다 8판, 1분, 승 2코인·무 1코인 + Random/Simple 자격 검사):
   ```bash
-  python3 tools/league.py omok-agent/smartplayerjinhajang.py agents/geonwoo/smartplayergeonwoo.py agents/minjun/smartplayerminjun.py
+  python3 tools/league.py omok-agent/smartplayerJangJinha.py agents/geonwoo/smartplayergeonwoo.py agents/minjun/smartplayerminjun.py
   ```
   결과는 `league/league-<시각>.md`로 저장.
 - 최종 제출 시에는 우승 에이전트의 클래스·파일 이름 접미사를 팀 이름(JRM)으로 바꾼다 (예: `SmartPlayerJRM`, `PlayerJRM`).

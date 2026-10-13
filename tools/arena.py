@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(ROOT, "omok-game"))
 from board import Board  # noqa: E402
 from randomplayer import RandomPlayer  # noqa: E402
 from simpleplayer import SimplePlayer  # noqa: E402
-import smartplayerjinhajang as sp  # noqa: E402
+import smartplayerJangJinha as sp  # noqa: E402
 
 SIZE = 19
 
@@ -104,7 +104,7 @@ def make_player(spec, color, nodes=None):
             kwargs["move_time"] = float(v)
         else:
             params[k] = float(v) if "." in v else int(v)
-    return sp.SmartPlayerJinhaJang(color, params=params, **kwargs)
+    return sp.SmartPlayerJangJinha(color, params=params, **kwargs)
 
 
 def play_game(job):

@@ -1,4 +1,4 @@
-"""Regression gate for SmartPlayerJinhaJang (development tool).
+"""Regression gate for SmartPlayerJangJinha (development tool).
 
 Runs the checks every version must pass before it is accepted:
   1. rule/engine unit tests,
@@ -55,6 +55,10 @@ def main():
         results.append(stage("vs SimplePlayer (30 s, slow machine)", a, "simple", 8, 0.5, 5, args.jobs))
         results.append(stage("vs depth-2 proxy (1 min, random openings)", a, "smart:depth=2",
                              8, 1, 5, args.jobs, openings=4))
+        # Team rivals: the target to beat and the previous version.
+        for name, path in (("Geonwoo2", "agents/geonwoo2/smartplayerJRM.py"),
+                           ("v10", "agents/jinha_v10/smartplayerJangJinha.py")):
+            results.append(stage(f"vs {name} (1 min, empty board)", a, path, 8, 1, 5, args.jobs))
     print("GATE", "PASS" if all(results) else "FAIL")
     sys.exit(0 if all(results) else 1)
 
