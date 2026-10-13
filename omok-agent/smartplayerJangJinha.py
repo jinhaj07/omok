@@ -47,7 +47,9 @@ DEFAULT_PARAMS = {
     "vct": 0,         # attacker threat moves in the root VCT search (0 = off)
     "vctk": 8,        # threat moves tried per VCT node
     "svct": 0,
-    "vfrac": 0.15,    # share of the move's hard limit the root VCT may use        # VCT depth used to vet our move against the opponent
+    "vfrac": 0.15,
+    "xcap": 1,        # 1 = score capture moves exactly (make/unmake), so a
+                      # capture that unblocks our lines counts as a threat    # share of the move's hard limit the root VCT may use        # VCT depth used to vet our move against the opponent
     "qvcf": 0,        # VCF depth searched at quiet leaves (0 = off)
     "safety": 1,      # 1 = reject root moves that allow an opponent VCF
     "tmax": 2.5,      # cap on the planned seconds per move
@@ -360,6 +362,7 @@ class _Engine:
         lk, cells = self.lk, self.cells
         cache, compute = self.cache, self.compute
         defw, capb = self.p["defw"], self.p["capb"]
+        xcap = self.p["xcap"]
         hist = self.history
         out = []
         for p in cand:
@@ -374,9 +377,20 @@ class _Engine:
                 d = cache.get(ko) or compute(ko)
                 att += a[ei] - b[ei]
                 dfn += d[eo] - b[eo]
+            ncap = 0
             for a, b, d in CAP_RAYS[p]:
                 if cells[a] == o and cells[b] == o and cells[d] == me:
-                    att += capb
+                    ncap += 1
+            if ncap:
+                if xcap:
+                    # Removing stones changes lines through the captured
+                    # cells too; measure the real effect.
+                    E = self.E
+                    e_me, e_o = E[me], E[o]
+                    cap = self.make(p, me)
+                    att = (E[me] - e_me) + (e_o - E[o])
+                    self.unmake(p, me, cap)
+                att += capb * ncap
             out.append((att + defw * dfn + hist[p], p))
         out.sort(reverse=True)
         return out
@@ -387,8 +401,20 @@ class _Engine:
         lk = self.lk
         cache, compute = self.cache, self.compute
         i4, i3, ie = 4 + me - 1, 8 + me - 1, me - 1
+        o = 3 - me
+        cells = self.cells
+        xcap = self.p["xcap"]
         out = []
         for p in cand:
+            if xcap and any(cells[a] == o and cells[b] == o and cells[d] == me
+                            for a, b, d in CAP_RAYS[p]):
+                nw0, t0, e0 = self.NW[me], self.T[me], self.E[me]
+                cap = self.make(p, me)
+                g4, g3, ev = self.NW[me] - nw0, self.T[me] - t0, self.E[me] - e0
+                self.unmake(p, me, cap)
+                if g4 > 0 or g3 > 0:
+                    out.append((g4 > 0, g4 + g3, ev, p))
+                continue
             g4 = g3 = 0
             ev = 0.0
             for lid, pw in CELL_LINES[p]:
@@ -421,8 +447,20 @@ class _Engine:
         lk = self.lk
         cache, compute = self.cache, self.compute
         idx = 4 + me - 1
+        o = 3 - me
+        cells = self.cells
+        xcap = self.p["xcap"]
         out = []
         for p in cand:
+            if xcap and any(cells[a] == o and cells[b] == o and cells[d] == me
+                            for a, b, d in CAP_RAYS[p]):
+                nw0 = self.NW[me]
+                cap = self.make(p, me)
+                gain = self.NW[me] - nw0
+                self.unmake(p, me, cap)
+                if gain > 0:
+                    out.append((gain, p))
+                continue
             gain = 0
             for lid, pw in CELL_LINES[p]:
                 k = lk[lid]
@@ -806,6 +844,7 @@ class SmartPlayerJangJinha(PlayerJangJinha):
                 ok = e.F[me] and not e.F[o]
                 e.unmake(p, me, cap)
                 if ok:
+                    self.last_info = ("win", 0, WIN, 0)
                     return divmod(p, SIZE)
 
         soft, hard = self._budget(time_left)
