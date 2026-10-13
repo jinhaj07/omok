@@ -32,13 +32,13 @@ WIN = 10_000_000
 # Tunable parameters. Values were set by tools/tune.py (self-play hill climb).
 DEFAULT_PARAMS = {
     "w1": 1.8797,        # window with 1 own stone
-    "w2": 15.3219,       # window with 2 own stones
+    "w2": 23.1797,       # window with 2 own stones
     "w3": 100.0,      # window with 3 own stones
     "w4": 411.2181,     # window with 4 own stones (one move from five)
     "cap": 108.8743,     # capture threat (X O O _ pattern)
-    "tempo": 1.7603,     # weight on the side to move's own score
+    "tempo": 1.561,     # weight on the side to move's own score
     "defw": 1.0648,      # move ordering: weight of blocking the opponent's gain
-    "capb": 475.0187,    # move ordering: bonus per pair a move captures
+    "capb": 640.9005,    # move ordering: bonus per pair a move captures
     "width": 10,      # moves searched at interior nodes
     "root_width": 20, # moves searched at the root
     "o3": 150.0,        # bonus per line holding an open three (can make an open four)
