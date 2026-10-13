@@ -44,10 +44,12 @@ DEFAULT_PARAMS = {
     "o3": 150.0,        # bonus per line holding an open three (can make an open four)
     "fork": 3000.0,      # side to move holds threats (open three / four) on 2+ lines
     "forko": 2000.0,     # opponent holds threats on 2+ lines
-    "vct": 0,         # attacker threat moves in the root VCT search (0 = off)
+    "vct": 5,         # attacker threat moves in the root VCT search (0 = off)
     "vctk": 8,        # threat moves tried per VCT node
     "svct": 0,
     "vfrac": 0.15,
+    "widen": 1,       # 1 = search all moves when the selected ones all lose
+    "abfrac": 0.7,    # share of the hard limit for alpha-beta (rest: safety)
     "xcap": 1,        # 1 = score capture moves exactly (make/unmake), so a
                       # capture that unblocks our lines counts as a threat    # share of the move's hard limit the root VCT may use        # VCT depth used to vet our move against the opponent
     "qvcf": 0,        # VCF depth searched at quiet leaves (0 = off)
@@ -544,9 +546,11 @@ class _Searcher:
             for p in e.capture_moves(me, cand):
                 if p not in moves:
                     moves.append(p)
-        else:
+        rest = ()
+        if not threatened:
             width = e.p["width"]
-            moves = [p for _, p in e.score_moves(me, cand)[:width]]
+            ranked = [p for _, p in e.score_moves(me, cand)]
+            moves, rest = ranked[:width], ranked[width:]
         if tt_move is not None and tt_move in moves:
             moves.remove(tt_move)
             moves.insert(0, tt_move)
@@ -554,20 +558,30 @@ class _Searcher:
         alpha0 = alpha
         best = -WIN * 2
         best_move = None
-        for p in moves:
-            cap = e.make(p, me)
-            val = self._after_move(me, ply + 1)
-            if val is None:
-                val = -self.negamax(depth - 1, -beta, -alpha, o, ply + 1, ext)
-            e.unmake(p, me, cap)
-            if val > best:
-                best = val
-                best_move = p
-                if val > alpha:
-                    alpha = val
-                    if alpha >= beta:
-                        e.history[p] += depth * depth
-                        break
+        cut = False
+        for batch in (moves, rest):
+            # Selective search only looks at the best `width` moves. If all
+            # of them lose, a defence may have been pruned: widen before
+            # concluding that this position is lost.
+            if batch is rest and (cut or best > -(WIN - 100) or not e.p["widen"]):
+                break
+            for p in batch:
+                cap = e.make(p, me)
+                val = self._after_move(me, ply + 1)
+                if val is None:
+                    val = -self.negamax(depth - 1, -beta, -alpha, o, ply + 1, ext)
+                e.unmake(p, me, cap)
+                if val > best:
+                    best = val
+                    best_move = p
+                    if val > alpha:
+                        alpha = val
+                        if alpha >= beta:
+                            e.history[p] += depth * depth
+                            cut = True
+                            break
+                if batch is rest and best > -(WIN - 100):
+                    break
         flag = 0 if alpha0 < best < beta else (1 if best >= beta else 2)
         e.tt[key] = (depth, flag, best, best_move)
         return best
@@ -887,7 +901,7 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         # budget for verifying the chosen move.
         safety = self.params["safety"]
         if safety and self.node_limit is None:
-            s.deadline = start + hard * 0.8
+            s.deadline = start + hard * self.params["abfrac"]
         # The soft limit (whether to start another depth) counts from here,
         # so time spent in the VCF/VCT phases does not starve the search.
         move, score, depth = s.root(me, self.max_depth, soft, time.monotonic())
@@ -900,6 +914,7 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         if safety and score < WIN - 100:
             s.deadline = start + hard
             order = [move] + [m for m in getattr(s, "root_order", []) if m != move]
+            proven = set()
             try:
                 for m in order[:8]:
                     cap = e.make(m, me)
@@ -910,11 +925,20 @@ class SmartPlayerJangJinha(PlayerJangJinha):
                         if not lost and self.params["svct"]:
                             lost = s.vct(o, self.params["svct"], 1, self.params["vctk"])
                     e.unmake(m, me, cap)
-                    if not lost:
+                    if lost:
+                        proven.add(m)
+                    else:
                         if m != move:
                             self.last_info = ("safe", depth, score, s.nodes)
                         move = m
                         break
             except _TimeUp:
-                pass
+                # Out of time: never play a move already proven to lose
+                # when an unchecked alternative is available.
+                if move in proven:
+                    for m in order[:8]:
+                        if m not in proven:
+                            move = m
+                            self.last_info = ("safe?", depth, score, s.nodes)
+                            break
         return divmod(move, SIZE)
