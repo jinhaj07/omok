@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "omok-agent"))
 import arena  # noqa: E402
 import smartplayerJangJinha as sp  # noqa: E402
 
-TUNABLE = ["w1", "w2", "w3", "w4", "cap", "tempo", "defw", "capb"]
+TUNABLE = ["w1", "w2", "w3", "w4", "cap", "tempo", "defw", "capb", "o3", "fork", "forko"]
 OUT_DIR = os.path.join(ROOT, "tuning")
 
 

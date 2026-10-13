@@ -41,6 +41,16 @@ DEFAULT_PARAMS = {
     "capb": 475.0187,    # move ordering: bonus per pair a move captures
     "width": 10,      # moves searched at interior nodes
     "root_width": 20, # moves searched at the root
+    "o3": 150.0,        # bonus per line holding an open three (can make an open four)
+    "fork": 3000.0,      # side to move holds threats (open three / four) on 2+ lines
+    "forko": 2000.0,     # opponent holds threats on 2+ lines
+    "vct": 0,         # attacker threat moves in the root VCT search (0 = off)
+    "vctk": 8,        # threat moves tried per VCT node
+    "svct": 0,        # VCT depth used to vet our move against the opponent
+    "qvcf": 0,        # VCF depth searched at quiet leaves (0 = off)
+    "safety": 1,      # 1 = reject root moves that allow an opponent VCF
+    "tmax": 2.5,      # cap on the planned seconds per move
+    "tmoves": 35,     # expected own moves per game for the time plan
 }
 
 
@@ -59,8 +69,10 @@ def _build_geometry():
         lines.append([r * SIZE + (s - r) for r in range(SIZE) if 0 <= s - r < SIZE])
 
     cell_lines = [[] for _ in range(NCELL)]
+    cell_pos = [[] for _ in range(NCELL)]
     for lid, cells in enumerate(lines):
         for i, p in enumerate(cells):
+            cell_pos[p].append((lid, i))
             # Each line key stores its length in the low 5 bits, digit i of the
             # base-3 number above that, so the key alone identifies the line.
             cell_lines[p].append((lid, 32 * 3 ** i))
@@ -80,10 +92,11 @@ def _build_geometry():
             if 0 <= r + 3 * dr < SIZE and 0 <= c + 3 * dc < SIZE:
                 rays.append(tuple((r + k * dr) * SIZE + (c + k * dc) for k in (1, 2, 3)))
         cap_rays.append(tuple(rays))
-    return lines, [tuple(x) for x in cell_lines], tuple(near), tuple(cap_rays)
+    return (lines, [tuple(x) for x in cell_lines], tuple(near), tuple(cap_rays),
+            [tuple(x) for x in cell_pos])
 
 
-LINES, CELL_LINES, NEAR, CAP_RAYS = _build_geometry()
+LINES, CELL_LINES, NEAR, CAP_RAYS, CELL_POS = _build_geometry()
 NLINES = len(LINES)
 LINE_BASE = [len(cells) for cells in LINES]   # key of an empty line
 
@@ -100,17 +113,34 @@ class _TimeUp(Exception):
 _LINE_CACHES = {}
 
 
+def _win_cells(cells, x, length):
+    """Empty cells of a line where colour x would complete an exact five."""
+    o = 3 - x
+    wins = set()
+    for s in range(length - 4):
+        seg = cells[s:s + 5]
+        if o in seg or seg.count(x) != 4:
+            continue
+        if (s > 0 and cells[s - 1] == x) or (s + 5 < length and cells[s + 5] == x):
+            continue
+        wins.add(s + seg.index(0))
+    return wins
+
+
 def _line_info_factory(params):
     weights = (0.0, params["w1"], params["w2"], params["w3"], params["w4"])
     capw = params["cap"]
-    key = (weights, capw)
+    o3w = params["o3"]
+    key = (weights, capw, o3w)
     cache = _LINE_CACHES.setdefault(key, {})
 
     def compute(k):
-        """Stats of one line: (E1, E2, F1, F2, NW1, NW2, wins1, wins2).
+        """Stats of one line: (E1, E2, F1, F2, NW1, NW2, wins1, wins2, T1, T2).
 
         E = evaluation score, F = 1 if an exact five exists, NW = number of
-        empty cells completing an exact five, wins = their positions."""
+        empty cells completing an exact five, wins = their positions,
+        T = 1 if the line holds a threat (a four, or an open three that can
+        become an open four)."""
         length = k & 31
         v = k >> 5
         cells = []
@@ -146,9 +176,21 @@ def _line_info_factory(params):
                     a, d = cells[i], cells[i + 3]
                     if (a == x and d == 0) or (a == 0 and d == x):
                         caps += 1
-            out.append((score + capw * caps, five, len(wins), tuple(sorted(wins))))
+            open3 = 0
+            if not wins and not five and cells.count(x) >= 3:
+                for e in range(length):
+                    if cells[e] == 0:
+                        cells[e] = x
+                        if len(_win_cells(cells, x, length)) >= 2:
+                            open3 = 1
+                        cells[e] = 0
+                        if open3:
+                            break
+            threat = 1 if (wins or open3) else 0
+            out.append((score + capw * caps + o3w * open3, five, len(wins),
+                        tuple(sorted(wins)), threat))
         info = (out[0][0], out[1][0], out[0][1], out[1][1],
-                out[0][2], out[1][2], out[0][3], out[1][3])
+                out[0][2], out[1][2], out[0][3], out[1][3], out[0][4], out[1][4])
         cache[k] = info
         return info
 
@@ -163,6 +205,7 @@ class _Engine:
         self.p = params
         self.cache, self.compute = _line_info_factory(params)
         self.tt = {}
+        self.vtt = {}
         self.history = [0] * NCELL
         self.reset()
 
@@ -177,6 +220,7 @@ class _Engine:
         self.E = [0.0, 0.0, 0.0]
         self.F = [0, 0, 0]
         self.NW = [0, 0, 0]
+        self.T = [0, 0, 0]
         self.h = 0
         self.stones = 0
         base = self.info
@@ -199,7 +243,7 @@ class _Engine:
         self.cells[p] = v
         self.h ^= ZOBRIST[v][p]
         self.stones += 1
-        lk, E, F, NW = self.lk, self.E, self.F, self.NW
+        lk, E, F, NW, T = self.lk, self.E, self.F, self.NW, self.T
         cache, compute = self.cache, self.compute
         for lid, pw in CELL_LINES[p]:
             k = lk[lid]
@@ -213,6 +257,8 @@ class _Engine:
             F[2] += n[3] - o[3]
             NW[1] += n[4] - o[4]
             NW[2] += n[5] - o[5]
+            T[1] += n[8] - o[8]
+            T[2] += n[9] - o[9]
         nb = self.nb
         for q in NEAR[p]:
             nb[q] += 1
@@ -222,7 +268,7 @@ class _Engine:
         self.cells[p] = 0
         self.h ^= ZOBRIST[v][p]
         self.stones -= 1
-        lk, E, F, NW = self.lk, self.E, self.F, self.NW
+        lk, E, F, NW, T = self.lk, self.E, self.F, self.NW, self.T
         cache, compute = self.cache, self.compute
         for lid, pw in CELL_LINES[p]:
             k = lk[lid]
@@ -236,6 +282,8 @@ class _Engine:
             F[2] += n[3] - o[3]
             NW[1] += n[4] - o[4]
             NW[2] += n[5] - o[5]
+            T[1] += n[8] - o[8]
+            T[2] += n[9] - o[9]
         nb = self.nb
         for q in NEAR[p]:
             nb[q] -= 1
@@ -297,7 +345,12 @@ class _Engine:
 
     def evaluate(self, me):
         o = 3 - me
-        return self.p["tempo"] * self.E[me] - self.E[o]
+        v = self.p["tempo"] * self.E[me] - self.E[o]
+        if self.T[me] >= 2:
+            v += self.p["fork"]
+        if self.T[o] >= 2:
+            v -= self.p["forko"]
+        return v
 
     def score_moves(self, me, cand):
         """Heuristic move ordering: own gain + weighted opponent gain denied."""
@@ -325,6 +378,41 @@ class _Engine:
                     att += capb
             out.append((att + defw * dfn + hist[p], p))
         out.sort(reverse=True)
+        return out
+
+    def threat_moves(self, me, cand):
+        """Moves creating a four or a new open three for `me`, strongest first.
+        Returns (move, makes_four) pairs."""
+        lk = self.lk
+        cache, compute = self.cache, self.compute
+        i4, i3, ie = 4 + me - 1, 8 + me - 1, me - 1
+        out = []
+        for p in cand:
+            g4 = g3 = 0
+            ev = 0.0
+            for lid, pw in CELL_LINES[p]:
+                k = lk[lid]
+                b = cache.get(k) or compute(k)
+                k2 = k + me * pw
+                a = cache.get(k2) or compute(k2)
+                g4 += a[i4] - b[i4]
+                g3 += a[i3] - b[i3]
+                ev += a[ie] - b[ie]
+            if g4 > 0 or g3 > 0:
+                out.append((g4 > 0, g4 + g3, ev, p))
+        out.sort(reverse=True)
+        return [(p, f) for f, _, _, p in out]
+
+    def line_cells_near(self, p, dist=4):
+        """Empty cells on the four lines through p within `dist` of p."""
+        cells = self.cells
+        out = []
+        for lid, i in CELL_POS[p]:
+            line = LINES[lid]
+            for j in range(max(0, i - dist), min(len(line), i + dist + 1)):
+                q = line[j]
+                if not cells[q]:
+                    out.append(q)
         return out
 
     def four_moves(self, me, cand):
@@ -389,6 +477,9 @@ class _Searcher:
                 depth = 1
                 ext -= 1
             else:
+                qd = e.p["qvcf"]
+                if qd and not threatened and self.vcf(me, qd, ply):
+                    return WIN - ply - 2 * qd
                 return e.evaluate(me)
 
         key = e.h ^ (ZOBRIST_SIDE if me == 2 else 0)
@@ -487,6 +578,77 @@ class _Searcher:
                 return False
         return True
 
+    def vct(self, a, depth, ply=0, width=8):
+        """True if attacker `a` (to move) wins by continuous threats
+        (fours and open threes). Conservative: a defender's counter-four
+        counts as a successful defence unless `a` can win at once."""
+        self._tick()
+        e = self.e
+        d = 3 - a
+        if e.NW[a]:
+            return True
+        if depth <= 0 or e.NW[d]:
+            return False
+        key = (e.h, a, depth)
+        hit = e.vtt.get(key)
+        if hit is not None:
+            return hit
+        result = False
+        for p, four in e.threat_moves(a, e.candidates())[:width]:
+            cap = e.make(p, a)
+            res = self._after_move(a, ply + 1)
+            if res is not None:
+                ok = res > 0
+            else:
+                ok = self._vct_defend(a, depth, ply + 1, None if e.NW[a] else p, width)
+            e.unmake(p, a, cap)
+            if ok:
+                result = True
+                break
+        e.vtt[key] = result
+        return result
+
+    def _vct_defend(self, a, depth, ply, three_at, width):
+        """Defender to move after `a`'s threat: True if every reply loses."""
+        e = self.e
+        d = 3 - a
+        cand = e.candidates()
+        if three_at is None:
+            replies = e.win_points(a)
+        else:
+            replies = e.line_cells_near(three_at)
+            replies += e.four_moves(d, cand)
+        replies += e.capture_moves(d, cand)
+        for r in dict.fromkeys(replies):
+            cap = e.make(r, d)
+            res = self._after_move(d, ply + 1)
+            if res is not None:
+                lost = res < 0
+            elif e.NW[d]:
+                lost = e.NW[a] > 0
+            else:
+                lost = self.vct(a, depth - 1, ply + 1, width)
+            e.unmake(r, d, cap)
+            if not lost:
+                return False
+        return True
+
+    def find_vct_move(self, me, depth, width):
+        e = self.e
+        if e.NW[3 - me]:
+            return None
+        for p, four in e.threat_moves(me, e.candidates())[:width]:
+            cap = e.make(p, me)
+            res = self._after_move(me, 1)
+            if res is not None:
+                ok = res > 0
+            else:
+                ok = self._vct_defend(me, depth, 1, None if e.NW[me] else p, width)
+            e.unmake(p, me, cap)
+            if ok:
+                return p
+        return None
+
     def find_vcf_move(self, me, depth):
         e = self.e
         if e.NW[3 - me]:
@@ -515,6 +677,7 @@ class _Searcher:
                     moves.append(p)
         else:
             moves = [p for _, p in e.score_moves(me, cand)[:e.p["root_width"]]]
+        self.root_order = list(moves)
         if not moves:
             return None, 0, 0
         if len(moves) == 1:
@@ -544,9 +707,10 @@ class _Searcher:
                     best_move, best_score = iter_best, iter_score
                 break
             best_move, best_score, done_depth = iter_best, iter_score, depth
+            moves.sort(key=lambda m: scores.get(m, -WIN * 3), reverse=True)
+            self.root_order = list(moves)
             if best_score >= WIN - 100 or best_score <= -(WIN - 100):
                 break
-            moves.sort(key=lambda m: scores.get(m, -WIN * 3), reverse=True)
             if time.monotonic() - start > soft_time:
                 break
         return best_move, best_score, done_depth
@@ -615,8 +779,8 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         usable = remaining - 4.0              # always keep a reserve
         if usable <= 0.5:
             return 0.02, max(0.05, min(0.3, remaining * 0.05))
-        expected_left = max(12, 35 - self.moves_played)
-        per_move = min(usable / expected_left, 2.5)
+        expected_left = max(12, self.params["tmoves"] - self.moves_played)
+        per_move = min(usable / expected_left, self.params["tmax"])
         return per_move * 0.45, min(per_move * 2.0, usable * 0.2)
 
     def _think(self, board, time_left, start):
@@ -630,6 +794,8 @@ class SmartPlayerJangJinha(PlayerJangJinha):
             return (mid, mid)
         if len(e.tt) > 400_000:
             e.tt.clear()
+        if len(e.vtt) > 200_000:
+            e.vtt.clear()
         e.history = [h >> 2 for h in e.history]
 
         # 1. Win now if possible.
@@ -657,13 +823,52 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         except _TimeUp:
             # The search was interrupted mid-line; rebuild the position.
             e.load(board)
+        # 2b. Forced win by continuous threats (fours and open threes).
+        vct_depth = self.params["vct"]
+        if vct_depth:
+            try:
+                if self.node_limit is None:
+                    s.deadline = start + hard * 0.35
+                p = s.find_vct_move(me, vct_depth, self.params["vctk"])
+                if p is not None:
+                    self.last_info = ("vct", 0, 0, s.nodes)
+                    return divmod(p, SIZE)
+            except _TimeUp:
+                e.load(board)
         s.deadline = start + hard
         if self.node_limit is not None:
             s.nodes = 0
 
-        # 3. Alpha-beta search.
+        # 3. Alpha-beta search. With the safety check on, keep part of the
+        # budget for verifying the chosen move.
+        safety = self.params["safety"]
+        if safety and self.node_limit is None:
+            s.deadline = start + hard * 0.8
         move, score, depth = s.root(me, self.max_depth, soft, start)
         self.last_info = ("ab", depth, score, s.nodes)
         if move is None:
             return None
+
+        # 4. Safety: skip moves after which the opponent wins by continuous
+        # fours (the alpha-beta horizon can miss long four sequences).
+        if safety and score < WIN - 100:
+            s.deadline = start + hard
+            order = [move] + [m for m in getattr(s, "root_order", []) if m != move]
+            try:
+                for m in order[:8]:
+                    cap = e.make(m, me)
+                    res = s._after_move(me, 1)
+                    lost = res is not None and res < 0
+                    if res is None:
+                        lost = s.vcf(o, 8)
+                        if not lost and self.params["svct"]:
+                            lost = s.vct(o, self.params["svct"], 1, self.params["vctk"])
+                    e.unmake(m, me, cap)
+                    if not lost:
+                        if m != move:
+                            self.last_info = ("safe", depth, score, s.nodes)
+                        move = m
+                        break
+            except _TimeUp:
+                pass
         return divmod(move, SIZE)

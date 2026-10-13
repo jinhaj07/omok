@@ -28,7 +28,7 @@ def engine_from(board):
 
 
 def snapshot(e):
-    return (list(e.cells), list(e.lk), list(e.nb), list(e.F), list(e.NW),
+    return (list(e.cells), list(e.lk), list(e.nb), list(e.F), list(e.NW), list(e.T),
             round(e.E[1], 6), round(e.E[2], 6), e.h, e.stones)
 
 
@@ -73,6 +73,23 @@ class RuleTests(unittest.TestCase):
         cap = e.make(5 * SIZE + 7, 1)
         self.assertEqual(e.F[1], 0)
         e.unmake(5 * SIZE + 7, 1, cap)
+
+    def test_threat_lines(self):
+        b = empty_board()
+        for c in (7, 8, 9):          # open three: _ X X X _ with space
+            b[9][c] = 0
+        e = engine_from(b)
+        self.assertEqual(e.T[1], 1)
+        b[9][6] = 1                  # blocked on one side: no open four possible
+        e = engine_from(b)
+        self.assertEqual(e.T[1], 0)
+        b[9][10] = 0                 # O X X X X _ : a four is a threat
+        e = engine_from(b)
+        self.assertEqual(e.T[1], 1)
+        b2 = empty_board()
+        for c in (7, 8, 10):         # broken three _ X X _ X _
+            b2[9][c] = 0
+        self.assertEqual(engine_from(b2).T[1], 1)
 
     def test_capture_turns_six_into_five_for_opponent(self):
         # White overline on row 4 (columns 2..8). Black captures the vertical

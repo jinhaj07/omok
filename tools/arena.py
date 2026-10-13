@@ -116,6 +116,7 @@ def play_game(job):
     clocks = [time_limit * 60.0 if time_limit > 0 else None] * 2
     max_move = [0.0, 0.0]
     moves = 0
+    history = []
     color = 0
     for r, c in opening:
         ref.PlaceStone(r, c, color)
@@ -124,7 +125,8 @@ def play_game(job):
         moves += 1
 
     def result(winner, reason):
-        return {"winner": winner, "reason": reason, "moves": moves,
+        return {"winner": winner, "reason": reason, "moves": moves, "history": history,
+                "opening": list(opening),
                 "max_move": max_move, "used": [
                     (time_limit * 60.0 - c) if c is not None else None for c in clocks]}
 
@@ -153,6 +155,7 @@ def play_game(job):
         ref.PlaceStone(r, c, color)
         ref.TakeStone(r, c, color)
         moves += 1
+        history.append((r, c))
         b5, w5 = ref.CheckOmok(0), ref.CheckOmok(1)
         if b5 and w5:
             return result(None, "double-five")
