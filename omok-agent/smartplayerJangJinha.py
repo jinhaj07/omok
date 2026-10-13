@@ -46,7 +46,8 @@ DEFAULT_PARAMS = {
     "forko": 2000.0,     # opponent holds threats on 2+ lines
     "vct": 0,         # attacker threat moves in the root VCT search (0 = off)
     "vctk": 8,        # threat moves tried per VCT node
-    "svct": 0,        # VCT depth used to vet our move against the opponent
+    "svct": 0,
+    "vfrac": 0.15,    # share of the move's hard limit the root VCT may use        # VCT depth used to vet our move against the opponent
     "qvcf": 0,        # VCF depth searched at quiet leaves (0 = off)
     "safety": 1,      # 1 = reject root moves that allow an opponent VCF
     "tmax": 2.5,      # cap on the planned seconds per move
@@ -828,12 +829,15 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         if vct_depth:
             try:
                 if self.node_limit is None:
-                    s.deadline = start + hard * 0.35
+                    s.deadline = start + hard * self.params["vfrac"]
+                t_vct = time.monotonic()
                 p = s.find_vct_move(me, vct_depth, self.params["vctk"])
+                self.last_vct = (time.monotonic() - t_vct, p is not None)
                 if p is not None:
                     self.last_info = ("vct", 0, 0, s.nodes)
                     return divmod(p, SIZE)
             except _TimeUp:
+                self.last_vct = (time.monotonic() - t_vct, None)
                 e.load(board)
         s.deadline = start + hard
         if self.node_limit is not None:
@@ -844,7 +848,9 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         safety = self.params["safety"]
         if safety and self.node_limit is None:
             s.deadline = start + hard * 0.8
-        move, score, depth = s.root(me, self.max_depth, soft, start)
+        # The soft limit (whether to start another depth) counts from here,
+        # so time spent in the VCF/VCT phases does not starve the search.
+        move, score, depth = s.root(me, self.max_depth, soft, time.monotonic())
         self.last_info = ("ab", depth, score, s.nodes)
         if move is None:
             return None
