@@ -96,6 +96,9 @@ def _harvest_game(job):
 def harvest(args):
     s = arena.run_match(args.agent, args.opponent, args.games, 1, jobs=4,
                         opening_stones=args.openings, seed=args.seed)
+    if args.dump:
+        with open(args.dump, "w") as f:
+            json.dump(s["games"], f)
     jobs = [(g, args.think, args.last) for g in s["games"]]
     with mp.Pool(2) as pool:
         results = pool.map(_harvest_game, jobs)
@@ -156,6 +159,7 @@ def main():
     ap.add_argument("--verify", type=float, default=6.0)
     ap.add_argument("--last", type=int, default=5)
     ap.add_argument("--jobs", type=int, default=2)
+    ap.add_argument("--dump", help="harvest: save the played games to this JSON file")
     args = ap.parse_args()
     (harvest if args.mode == "harvest" else test)(args)
 
