@@ -361,7 +361,7 @@ class _Engine:
             v -= self.p["forko"]
         return v
 
-    def score_moves(self, me, cand):
+    def score_moves(self, me, cand, with_history=True):
         """Heuristic move ordering: own gain + weighted opponent gain denied."""
         o = 3 - me
         ei, eo = me - 1, o - 1
@@ -369,7 +369,7 @@ class _Engine:
         cache, compute = self.cache, self.compute
         defw, capb = self.p["defw"], self.p["capb"]
         xcap = self.p["xcap"]
-        hist = self.history
+        hist = self.history if with_history else [0] * NCELL
         out = []
         for p in cand:
             att = 0.0
@@ -552,10 +552,15 @@ class _Searcher:
         rest = ()
         if not threatened:
             width = e.p["width"]
-            ranked = e.ocache.get(key)
-            if ranked is None:
-                ranked = [p for _, p in e.score_moves(me, cand)]
-                e.ocache[key] = ranked
+            # Static move scores are cached per position (the expensive
+            # part); the history bonus changes during the search, so it is
+            # added fresh before the selection.
+            static = e.ocache.get(key)
+            if static is None:
+                static = e.score_moves(me, cand, with_history=False)
+                e.ocache[key] = static
+            hist = e.history
+            ranked = [p for _, p in sorted(((sc + hist[p], p) for sc, p in static), reverse=True)]
             moves, rest = ranked[:width], ranked[width:]
         if tt_move is not None and tt_move in moves:
             moves.remove(tt_move)
