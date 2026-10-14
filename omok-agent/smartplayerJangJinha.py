@@ -185,7 +185,9 @@ def _line_info_factory(params):
             open3 = 0
             if not wins and not five and cells.count(x) >= 3:
                 for e in range(length):
-                    if cells[e] == 0:
+                    # Only a cell with 3+ own stones within reach can turn
+                    # the line into an open four.
+                    if cells[e] == 0 and cells[max(0, e - 4):e + 5].count(x) >= 3:
                         cells[e] = x
                         if len(_win_cells(cells, x, length)) >= 2:
                             open3 = 1
@@ -212,6 +214,7 @@ class _Engine:
         self.cache, self.compute = _line_info_factory(params)
         self.tt = {}
         self.vtt = {}
+        self.ocache = {}   # move ordering per position (reused across depths)
         self.history = [0] * NCELL
         self.reset()
 
@@ -549,7 +552,10 @@ class _Searcher:
         rest = ()
         if not threatened:
             width = e.p["width"]
-            ranked = [p for _, p in e.score_moves(me, cand)]
+            ranked = e.ocache.get(key)
+            if ranked is None:
+                ranked = [p for _, p in e.score_moves(me, cand)]
+                e.ocache[key] = ranked
             moves, rest = ranked[:width], ranked[width:]
         if tt_move is not None and tt_move in moves:
             moves.remove(tt_move)
@@ -850,6 +856,8 @@ class SmartPlayerJangJinha(PlayerJangJinha):
             e.tt.clear()
         if len(e.vtt) > 200_000:
             e.vtt.clear()
+        if len(e.ocache) > 100_000:
+            e.ocache.clear()
         e.history = [h >> 2 for h in e.history]
 
         # 1. Win now if possible.
