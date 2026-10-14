@@ -48,6 +48,9 @@ DEFAULT_PARAMS = {
     "vctk": 8,        # threat moves tried per VCT node
     "svct": 0,
     "vfrac": 0.15,
+    "strict": 1,      # 1 = threatened nodes search only replies that really stop
+                      # every immediate win (blocks, captures, draw escapes);
+                      # adapted from Geonwoo v3's hybrid agent
     "widen": 1,       # 1 = search all moves when the selected ones all lose
     "abfrac": 0.7,    # share of the hard limit for alpha-beta (rest: safety)
     "xcap": 1,        # 1 = score capture moves exactly (make/unmake), so a
@@ -215,6 +218,8 @@ class _Engine:
         self.tt = {}
         self.vtt = {}
         self.ocache = {}   # move ordering per position (reused across depths)
+        self.wcache = {}   # strict win points per (position, colour)
+        self.dcache = {}   # safe defences per (position, colour)
         self.history = [0] * NCELL
         self.reset()
 
@@ -336,6 +341,71 @@ class _Engine:
                 for i in w:
                     pts.append(cells[i])
         return list(dict.fromkeys(pts))
+
+    def strict_wins(self, me):
+        """Win points that still win after the captures the move makes."""
+        if not self.NW[me]:
+            return []
+        key = (self.h, me)
+        hit = self.wcache.get(key)
+        if hit is not None:
+            return list(hit)
+        enemy = 3 - me
+        cells = self.cells
+        result = []
+        for p in self.win_points(me):
+            if not any(cells[a] == enemy and cells[b] == enemy and cells[d] == me
+                       for a, b, d in CAP_RAYS[p]):
+                result.append(p)
+                continue
+            cap = self.make(p, me)
+            if self.F[me] and not self.F[enemy]:
+                result.append(p)
+            self.unmake(p, me, cap)
+        self.wcache[key] = tuple(result)
+        return result
+
+    def defences(self, me):
+        """Replies for `me` that stop every immediate win of the opponent:
+        blocks, captures, and quiet moves that turn the opponent's winning
+        capture into a draw. Wins first, draws last; empty = lost.
+        (Adapted from Geonwoo v3's hybrid agent.)"""
+        key = (self.h, me)
+        hit = self.dcache.get(key)
+        if hit is not None:
+            return list(hit)
+        enemy = 3 - me
+        cells = self.cells
+        threats = self.strict_wins(enemy)
+        cand = self.candidates()
+        choices = set(threats) | set(self.capture_moves(me, cand)) | set(self.win_points(me))
+        enemy_caps = set(self.capture_moves(enemy, threats))
+        for t in threats:
+            if t in enemy_caps:
+                cap = self.make(t, enemy)
+                choices.update(self.win_points(me))
+                self.unmake(t, enemy, cap)
+            for a, b, d in CAP_RAYS[t]:
+                if cells[d] != enemy:
+                    continue
+                if cells[a] == me and cells[b] == 0:
+                    choices.add(b)
+                elif cells[a] == 0 and cells[b] == me:
+                    choices.add(a)
+        wins, safe, draws = [], [], []
+        for _, p in self.score_moves(me, [q for q in choices if not cells[q]]):
+            cap = self.make(p, me)
+            f_me, f_en = self.F[me], self.F[enemy]
+            if f_me and f_en:
+                draws.append(p)
+            elif f_me:
+                wins.append(p)
+            elif not f_en and not self.strict_wins(enemy):
+                safe.append(p)
+            self.unmake(p, me, cap)
+        out = wins + safe + draws
+        self.dcache[key] = tuple(out)
+        return out
 
     def candidates(self):
         cells, nb = self.cells, self.nb
@@ -514,9 +584,10 @@ class _Searcher:
         self._tick()
         e = self.e
         o = 3 - me
-        if e.NW[me]:
+        strict = e.p["strict"]
+        if e.NW[me] and (not strict or e.strict_wins(me)):
             return WIN - ply
-        threatened = e.NW[o] > 0
+        threatened = e.NW[o] > 0 and (not strict or bool(e.strict_wins(o)))
         if depth <= 0:
             if threatened and ext > 0:
                 depth = 1
@@ -545,10 +616,15 @@ class _Searcher:
         if not cand:
             return 0
         if threatened:
-            moves = e.win_points(o)
-            for p in e.capture_moves(me, cand):
-                if p not in moves:
-                    moves.append(p)
+            if e.p["strict"]:
+                moves = e.defences(me)
+                if not moves:
+                    return -(WIN - ply - 2)
+            else:
+                moves = e.win_points(o)
+                for p in e.capture_moves(me, cand):
+                    if p not in moves:
+                        moves.append(p)
         rest = ()
         if not threatened:
             width = e.p["width"]
@@ -624,10 +700,13 @@ class _Searcher:
         """`o` to move, facing `me`'s five threat: True if every reply loses."""
         e = self.e
         o = 3 - me
-        replies = e.win_points(me)
-        for p in e.capture_moves(o, e.candidates()):
-            if p not in replies:
-                replies.append(p)
+        if e.p["strict"]:
+            replies = e.defences(o)
+        else:
+            replies = e.win_points(me)
+            for p in e.capture_moves(o, e.candidates()):
+                if p not in replies:
+                    replies.append(p)
         for p in replies:
             cap = e.make(p, o)
             res = self._after_move(o, ply + 1)
@@ -679,7 +758,12 @@ class _Searcher:
         d = 3 - a
         cand = e.candidates()
         if three_at is None:
-            replies = e.win_points(a)
+            if e.p["strict"]:
+                replies = e.defences(d)
+                if not replies:
+                    return True
+            else:
+                replies = e.win_points(a)
         else:
             replies = e.line_cells_near(three_at)
             replies += e.four_moves(d, cand)
@@ -735,11 +819,13 @@ class _Searcher:
         e = self.e
         o = 3 - me
         cand = e.candidates()
-        if e.NW[o]:
-            moves = e.win_points(o)
-            for p in e.capture_moves(me, cand):
-                if p not in moves:
-                    moves.append(p)
+        if e.NW[o] and (not e.p["strict"] or e.strict_wins(o)):
+            moves = e.defences(me) if e.p["strict"] else []
+            if not moves:
+                moves = e.win_points(o)
+                for p in e.capture_moves(me, cand):
+                    if p not in moves:
+                        moves.append(p)
         else:
             moves = [p for _, p in e.score_moves(me, cand)[:e.p["root_width"]]]
         self.root_order = list(moves)
@@ -863,6 +949,9 @@ class SmartPlayerJangJinha(PlayerJangJinha):
             e.vtt.clear()
         if len(e.ocache) > 100_000:
             e.ocache.clear()
+        if len(e.wcache) > 200_000:
+            e.wcache.clear()
+            e.dcache.clear()
         e.history = [h >> 2 for h in e.history]
 
         # 1. Win now if possible.
