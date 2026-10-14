@@ -1,4 +1,4 @@
-# SmartPlayerJangJinha: Omok++ game agent.
+# SmartPlayerJangJinha (v12): Omok++ game agent.
 #
 # LLM usage: this file was written with Claude Code (Anthropic) and reviewed
 # by the team. See README.txt and llm-usage/ for the full record.
