@@ -60,6 +60,9 @@ DEFAULT_PARAMS = {
     "tmax": 2.5,      # cap on the planned seconds per move
     "tmoves": 35,     # expected own moves per game for the time plan
     "tsoft": 0.45,
+    "unst": 0,        # 1 = if the best move changed or its score fell by 300+
+                      # at the last depth, extend the soft limit once
+                      # (from Geonwoo v3's hybrid agent)
     "book": 0,        # white's first reply to a lone black stone:
                       # 0 = search, 1 = diagonally adjacent, 2 = orthogonally adjacent    # start no new depth after this share of the planned time
 }
@@ -837,6 +840,7 @@ class _Searcher:
             return moves[0], 0, 0
 
         best_move, best_score, done_depth = moves[0], -WIN * 2, 0
+        extended = False
         for depth in range(1, max_depth + 1):
             alpha, beta = -WIN * 2, WIN * 2
             iter_best, iter_score = None, -WIN * 2
@@ -859,13 +863,18 @@ class _Searcher:
                 if iter_best is not None and (iter_best == best_move or iter_score > best_score):
                     best_move, best_score = iter_best, iter_score
                 break
+            unstable = done_depth > 0 and (iter_best != best_move or iter_score < best_score - 300)
             best_move, best_score, done_depth = iter_best, iter_score, depth
             moves.sort(key=lambda m: scores.get(m, -WIN * 3), reverse=True)
             self.root_order = list(moves)
             if best_score >= WIN - 100 or best_score <= -(WIN - 100):
                 break
             if time.monotonic() - start > soft_time:
-                break
+                if unstable and e.p["unst"] and not extended:
+                    soft_time = max(soft_time, (self.deadline - start) * 0.9)
+                    extended = True
+                else:
+                    break
         return best_move, best_score, done_depth
 
 
