@@ -63,6 +63,9 @@ DEFAULT_PARAMS = {
     "unst": 0,        # 1 = if the best move changed or its score fell by 300+
                       # at the last depth, extend the soft limit once
                       # (from Geonwoo v3's hybrid agent)
+    "gsafe": 0,       # 1 = safety check in Geonwoo v3's style: exact immediate
+                      # wins, a short time-capped enemy VCF scout, and a loss
+                      # only when a verifier checks every defender reply
     "book": 0,        # white's first reply to a lone black stone:
                       # 0 = search, 1 = diagonally adjacent, 2 = orthogonally adjacent    # start no new depth after this share of the planned time
 }
@@ -381,6 +384,26 @@ class _Engine:
             return list(hit)
         enemy = 3 - me
         cells = self.cells
+        choices = self.defence_candidates(me)
+        wins, safe, draws = [], [], []
+        for _, p in self.score_moves(me, [q for q in choices if not cells[q]]):
+            cap = self.make(p, me)
+            f_me, f_en = self.F[me], self.F[enemy]
+            if f_me and f_en:
+                draws.append(p)
+            elif f_me:
+                wins.append(p)
+            elif not f_en and not self.strict_wins(enemy):
+                safe.append(p)
+            self.unmake(p, me, cap)
+        out = wins + safe + draws
+        self.dcache[key] = tuple(out)
+        return out
+
+    def defence_candidates(self, me):
+        """Every reply that could stop the opponent's immediate wins."""
+        enemy = 3 - me
+        cells = self.cells
         threats = self.strict_wins(enemy)
         cand = self.candidates()
         choices = set(threats) | set(self.capture_moves(me, cand)) | set(self.win_points(me))
@@ -397,20 +420,17 @@ class _Engine:
                     choices.add(b)
                 elif cells[a] == 0 and cells[b] == me:
                     choices.add(a)
-        wins, safe, draws = [], [], []
-        for _, p in self.score_moves(me, [q for q in choices if not cells[q]]):
-            cap = self.make(p, me)
-            f_me, f_en = self.F[me], self.F[enemy]
-            if f_me and f_en:
-                draws.append(p)
-            elif f_me:
-                wins.append(p)
-            elif not f_en and not self.strict_wins(enemy):
-                safe.append(p)
-            self.unmake(p, me, cap)
-        out = wins + safe + draws
-        self.dcache[key] = tuple(out)
-        return out
+        return {p for p in choices if not cells[p]}
+
+    def outcome(self, me):
+        """1 win, -1 loss, 0 draw, None ongoing (after captures)."""
+        if self.F[me] and self.F[3 - me]:
+            return 0
+        if self.F[me]:
+            return 1
+        if self.F[3 - me]:
+            return -1
+        return 0 if self.stones == NCELL else None
 
     def candidates(self):
         cells, nb = self.cells, self.nb
@@ -878,6 +898,91 @@ class _Searcher:
         return best_move, best_score, done_depth
 
 
+class _ProofUnknown(Exception):
+    pass
+
+
+class _ForcingVerifier:
+    """Proves a forcing-four win: selective attacks, but every defender reply
+    that could matter is checked. True = proved; None = unknown.
+    (Adapted from Geonwoo v3's hybrid agent, after Minjun v3.)"""
+
+    def __init__(self, engine, deadline, node_limit=1500):
+        self.e = engine
+        self.deadline = deadline
+        self.node_limit = node_limit
+        self.nodes = 0
+
+    def tick(self):
+        self.nodes += 1
+        if self.nodes > self.node_limit or time.monotonic() >= self.deadline:
+            raise _ProofUnknown
+
+    def verify(self, move, attacker, depth=3):
+        e = self.e
+        if e.cells[move]:
+            return False
+        try:
+            self.tick()
+            cap = e.make(move, attacker)
+            try:
+                result = e.outcome(attacker)
+                if result is not None:
+                    return result == 1
+                if not e.strict_wins(attacker):
+                    return None
+                return self.defend(attacker, depth - 1)
+            finally:
+                e.unmake(move, attacker, cap)
+        except _ProofUnknown:
+            return None
+
+    def attack(self, attacker, left):
+        e = self.e
+        self.tick()
+        if e.strict_wins(attacker):
+            return True
+        if left <= 0:
+            return False
+        for move in e.four_moves(attacker, e.candidates())[:8]:
+            self.tick()
+            cap = e.make(move, attacker)
+            try:
+                result = e.outcome(attacker)
+                if result == 1:
+                    return True
+                if result is None and e.strict_wins(attacker):
+                    if self.defend(attacker, left - 1):
+                        return True
+            finally:
+                e.unmake(move, attacker, cap)
+        return False
+
+    def defend(self, attacker, left):
+        e = self.e
+        self.tick()
+        defender = 3 - attacker
+        if e.strict_wins(defender):
+            return False
+        relevant = e.defence_candidates(defender)
+        priority = set(e.strict_wins(attacker))
+        priority.update(e.capture_moves(defender, list(relevant)))
+        for move in sorted(relevant, key=lambda p: (p not in priority, p)):
+            self.tick()
+            cap = e.make(move, defender)
+            try:
+                result = e.outcome(attacker)
+                if result in (-1, 0):
+                    return False
+                if result == 1 or e.strict_wins(attacker):
+                    continue
+                if not self.attack(attacker, left):
+                    return False
+            finally:
+                e.unmake(move, defender, cap)
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Player
 
@@ -945,9 +1050,46 @@ class SmartPlayerJangJinha(PlayerJangJinha):
         per_move = min(usable / expected_left, self.params["tmax"])
         return per_move * self.params["tsoft"], min(per_move * 2.0, usable * 0.2)
 
+    def _gsafe(self, e, s, me, o, order, start, hard, proven):
+        """Geonwoo v3 style check of the top 5 moves; returns [chosen] or []."""
+        deadline = start + hard
+        for m in order[:5]:
+            if time.monotonic() >= deadline:
+                break
+            cap = e.make(m, me)
+            reloaded = False
+            try:
+                result = e.outcome(me)
+                lost = result == -1
+                if result is None:
+                    lost = bool(e.strict_wins(o))
+                    if not lost and time.monotonic() < deadline - 0.03:
+                        scout = _Searcher(e)
+                        scout.deadline = min(deadline, time.monotonic() + min(0.12, hard * 0.06))
+                        try:
+                            response = scout.find_vcf_move(o, 5)
+                        except _TimeUp:
+                            # The scout stopped mid-line; rebuild the position.
+                            response = None
+                            e.load(self._board)
+                            reloaded = True
+                        if (response is not None and not reloaded
+                                and time.monotonic() < deadline - 0.02):
+                            v = _ForcingVerifier(e, deadline, node_limit=1500)
+                            lost = v.verify(response, o) is True
+            finally:
+                if not reloaded:
+                    e.unmake(m, me, cap)
+            if not lost:
+                return [m]
+            proven.add(m)
+        rest = [m for m in order[:8] if m not in proven]
+        return rest[:1]
+
     def _think(self, board, time_left, start):
         e = self.engine
         e.load(board)
+        self._board = board
         me = self.color + 1
         o = 3 - me
         mid = SIZE // 2
@@ -1038,6 +1180,13 @@ class SmartPlayerJangJinha(PlayerJangJinha):
             s.deadline = start + hard
             order = [move] + [m for m in getattr(s, "root_order", []) if m != move]
             proven = set()
+            if self.params["gsafe"]:
+                order = self._gsafe(e, s, me, o, order, start, hard, proven)
+                if order and order[0] != move:
+                    self.last_info = ("safe", depth, score, s.nodes)
+                if order:
+                    move = order[0]
+                order = []
             try:
                 for m in order[:8]:
                     cap = e.make(m, me)
