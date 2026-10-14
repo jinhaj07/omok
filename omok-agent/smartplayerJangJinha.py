@@ -48,7 +48,7 @@ DEFAULT_PARAMS = {
     "vctk": 8,        # threat moves tried per VCT node
     "svct": 0,
     "vfrac": 0.15,
-    "strict": 1,      # 1 = threatened nodes search only replies that really stop
+    "strict": 0,      # 1 = threatened nodes search only replies that really stop
                       # every immediate win (blocks, captures, draw escapes);
                       # adapted from Geonwoo v3's hybrid agent
     "widen": 1,       # 1 = search all moves when the selected ones all lose
@@ -59,7 +59,9 @@ DEFAULT_PARAMS = {
     "safety": 1,      # 1 = reject root moves that allow an opponent VCF
     "tmax": 2.5,      # cap on the planned seconds per move
     "tmoves": 35,     # expected own moves per game for the time plan
-    "tsoft": 0.45,    # start no new depth after this share of the planned time
+    "tsoft": 0.45,
+    "book": 0,        # white's first reply to a lone black stone:
+                      # 0 = search, 1 = diagonally adjacent, 2 = orthogonally adjacent    # start no new depth after this share of the planned time
 }
 
 
@@ -943,6 +945,16 @@ class SmartPlayerJangJinha(PlayerJangJinha):
 
         if e.stones == 0:
             return (mid, mid)
+        book = self.params["book"]
+        if book and e.stones == 1 and self.color == 1:
+            p = next(q for q in range(NCELL) if e.cells[q])
+            r, c = divmod(p, SIZE)
+            # Step toward the centre so the reply never leaves the board.
+            dr = 1 if r < mid else -1
+            dc = 1 if c < mid else -1
+            reply = (r + dr, c + dc) if book == 1 else (r + dr, c)
+            if 0 <= reply[0] < SIZE and 0 <= reply[1] < SIZE:
+                return reply
         if len(e.tt) > 400_000:
             e.tt.clear()
         if len(e.vtt) > 200_000:
