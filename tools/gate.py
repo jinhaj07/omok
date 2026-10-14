@@ -57,6 +57,7 @@ def main():
                              8, 1, 5, args.jobs, openings=4))
         # Team rivals: the target to beat and the previous version.
         for name, path in (("Geonwoo2", "agents/geonwoo2/smartplayerJRM.py"),
+                           ("Minjun3", "agents/minjun3/smartplayerJRM.py"),
                            ("v10", "agents/jinha_v10/smartplayerJangJinha.py")):
             results.append(stage(f"vs {name} (1 min, empty board)", a, path, 8, 1, 5, args.jobs))
     print("GATE", "PASS" if all(results) else "FAIL")
