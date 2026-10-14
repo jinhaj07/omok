@@ -39,9 +39,10 @@ def main():
     ap.add_argument("--seed", type=int, default=5)
     ap.add_argument("--last", type=int, default=6, help="A's last N moves to re-search")
     ap.add_argument("--think", type=float, default=15.0)
+    ap.add_argument("--time", type=float, default=1, help="game clock in minutes")
     ap.add_argument("--dump", help="save the games (with move history) to this JSON file")
     args = ap.parse_args()
-    s = arena.run_match(args.a, args.b, args.games, 1, jobs=4,
+    s = arena.run_match(args.a, args.b, args.games, args.time, jobs=4,
                         opening_stones=args.openings, seed=args.seed)
     if args.dump:
         import json
