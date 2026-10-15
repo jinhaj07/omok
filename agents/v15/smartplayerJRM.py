@@ -1372,10 +1372,15 @@ class SmartPlayerJRM(PlayerJRM):
         hard = min(4.0 * ts, base * (1.35 if pressure else 1.05))
         if remaining is not None:
             hard = min(hard, max(0.001, remaining * 0.8 - 0.025))
+        # Opening caps (seconds) on the first moves; cap2w/cap5w override
+        # them for white.
+        cap2, cap5 = self.params.get('cap2', 0.5), self.params.get('cap5', 1.1)
+        if self.color == 1:
+            cap2, cap5 = self.params.get('cap2w', cap2), self.params.get('cap5w', cap5)
         if stones <= 2:
-            hard = min(hard, 0.5)
+            hard = min(hard, cap2)
         elif stones <= 5:
-            hard = min(hard, 1.1)
+            hard = min(hard, cap5)
         return max(0.001, hard * 0.67), max(0.001, hard)
 
     def take_turn(self, board, time):
