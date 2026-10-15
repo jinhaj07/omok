@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 tuning/_*.json
 dist/
+tuning/book_res_*.txt
