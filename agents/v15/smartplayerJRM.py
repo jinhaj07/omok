@@ -163,6 +163,8 @@ class _Engine:
         self.F = [0, 0, 0]
         self.NW = [0, 0, 0]
         self.T = [0, 0, 0]
+        # v15: ids of lines holding a five-completing cell, per colour.
+        self.WL = [None, set(), set()]
         self.h = 0
         self.stones = 0
         base = self.info
@@ -186,6 +188,7 @@ class _Engine:
         self.stones += 1
         lk, E, F, NW, T = (self.lk, self.E, self.F, self.NW, self.T)
         cache, compute = (self.cache, self.compute)
+        wl1, wl2 = self.WL[1], self.WL[2]
         for lid, pw in CELL_LINES[p]:
             k = lk[lid]
             o = cache.get(k) or compute(k)
@@ -196,8 +199,18 @@ class _Engine:
             E[2] += n[1] - o[1]
             F[1] += n[2] - o[2]
             F[2] += n[3] - o[3]
-            NW[1] += n[4] - o[4]
-            NW[2] += n[5] - o[5]
+            if n[4] != o[4]:
+                NW[1] += n[4] - o[4]
+                if n[4]:
+                    wl1.add(lid)
+                else:
+                    wl1.discard(lid)
+            if n[5] != o[5]:
+                NW[2] += n[5] - o[5]
+                if n[5]:
+                    wl2.add(lid)
+                else:
+                    wl2.discard(lid)
             T[1] += n[8] - o[8]
             T[2] += n[9] - o[9]
         nb = self.nb
@@ -211,6 +224,7 @@ class _Engine:
         self.stones -= 1
         lk, E, F, NW, T = (self.lk, self.E, self.F, self.NW, self.T)
         cache, compute = (self.cache, self.compute)
+        wl1, wl2 = self.WL[1], self.WL[2]
         for lid, pw in CELL_LINES[p]:
             k = lk[lid]
             o = cache.get(k) or compute(k)
@@ -221,8 +235,18 @@ class _Engine:
             E[2] += n[1] - o[1]
             F[1] += n[2] - o[2]
             F[2] += n[3] - o[3]
-            NW[1] += n[4] - o[4]
-            NW[2] += n[5] - o[5]
+            if n[4] != o[4]:
+                NW[1] += n[4] - o[4]
+                if n[4]:
+                    wl1.add(lid)
+                else:
+                    wl1.discard(lid)
+            if n[5] != o[5]:
+                NW[2] += n[5] - o[5]
+                if n[5]:
+                    wl2.add(lid)
+                else:
+                    wl2.discard(lid)
             T[1] += n[8] - o[8]
             T[2] += n[9] - o[9]
         nb = self.nb
@@ -258,7 +282,8 @@ class _Engine:
         pts = []
         idx = 6 + x - 1
         lk, cache, compute = (self.lk, self.cache, self.compute)
-        for lid in range(NLINES):
+        # v15: only lines known to hold such a cell, in the same line order.
+        for lid in sorted(self.WL[x]):
             k = lk[lid]
             inf = cache.get(k) or compute(k)
             w = inf[idx]
