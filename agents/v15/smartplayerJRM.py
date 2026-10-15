@@ -54,6 +54,8 @@ ZOBRIST_SIDE = _rng.getrandbits(64)
 class _TimeUp(Exception):
     pass
 _LINE_CACHES = {}
+# v15: per-line four gains, keyed by line contents and colour (see four_moves).
+_FOUR_LINES = {}
 
 def _win_cells(cells, x, length):
     """Empty cells of a line where colour x would complete an exact five."""
@@ -379,16 +381,29 @@ class _Engine:
         return out
 
     def four_moves(self, me, cand):
-        """Moves that give `me` a new way to complete five (fours)."""
+        """Moves that give `me` a new way to complete five (fours).
+
+        v15 (JangJinha): the gain of every empty cell of a line is cached by
+        the line's contents, so a call costs one lookup per line instead of
+        eight per candidate, and capture moves are found from `me`'s stones.
+        The result is identical to the per-candidate computation."""
         lk = self.lk
-        cache, compute = (self.cache, self.compute)
-        idx = 4 + me - 1
-        o = 3 - me
-        cells = self.cells
-        xcap = self.p['xcap']
+        gains = {}
+        four_lines = _FOUR_LINES
+        for lid in range(NLINES):
+            k = lk[lid]
+            ent = four_lines.get(k * 4 + me)
+            if ent is None:
+                ent = self._four_line(k, me)
+            if ent:
+                line = LINES[lid]
+                for i, d in ent:
+                    q = line[i]
+                    gains[q] = gains.get(q, 0) + d
+        caps = self._capture_cells(me) if self.p['xcap'] else ()
         out = []
         for p in cand:
-            if xcap and any((cells[a] == o and cells[b] == o and (cells[d] == me) for a, b, d in CAP_RAYS[p])):
+            if p in caps:
                 nw0 = self.NW[me]
                 cap = self.make(p, me)
                 try:
@@ -398,17 +413,44 @@ class _Engine:
                 if gain > 0:
                     out.append((gain, p))
                 continue
-            gain = 0
-            for lid, pw in CELL_LINES[p]:
-                k = lk[lid]
-                b = cache.get(k) or compute(k)
-                k2 = k + me * pw
-                a = cache.get(k2) or compute(k2)
-                gain += a[idx] - b[idx]
+            gain = gains.get(p, 0)
             if gain > 0:
                 out.append((gain, p))
         out.sort(reverse=True)
         return [p for _, p in out]
+
+    def _four_line(self, k, me):
+        """(index, change in `me`'s five-completing cells) for each empty
+        cell of line `k` where a stone of `me` changes that count."""
+        cache, compute = self.cache, self.compute
+        idx = 3 + me
+        base = (cache.get(k) or compute(k))[idx]
+        out = []
+        v = k >> 5
+        pw = 32
+        for i in range(k & 31):
+            if v % 3 == 0:
+                k2 = k + me * pw
+                d = (cache.get(k2) or compute(k2))[idx] - base
+                if d:
+                    out.append((i, d))
+            v //= 3
+            pw *= 3
+        ent = tuple(out)
+        _FOUR_LINES[k * 4 + me] = ent
+        return ent
+
+    def _capture_cells(self, me):
+        """Empty cells where a stone of `me` captures a pair (as in make())."""
+        o = 3 - me
+        cells = self.cells
+        out = set()
+        for d in range(NCELL):
+            if cells[d] == me:
+                for a, b, p in CAP_RAYS[d]:
+                    if cells[a] == o and cells[b] == o and not cells[p]:
+                        out.add(p)
+        return out
 
 class _HybridEngine(_Engine):
     """Fast line engine with capture-aware wins and complete tactical escapes."""
