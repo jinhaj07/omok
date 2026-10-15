@@ -64,6 +64,10 @@ def canonical(board):
     return key, best[1]
 
 
+def clock_list(args):
+    return [float(x) for x in args.clocks.split(",")] if args.clocks else CLOCKS
+
+
 def _play(job):
     return arena.play_game(job)
 
@@ -99,53 +103,72 @@ def candidates_for(agent, board, color, k):
     return [divmod(p, SIZE) for _, p in ranked[:k]]
 
 
+def _inverse(i):
+    pts = [(0, 1), (2, 5)]
+    return next(j for j in range(8) if all(TRANSFORMS[j](*TRANSFORMS[i](r, c)) == (r, c) for r, c in pts))
+
+
+INVERSE = [_inverse(i) for i in range(8)]
+
+
 def tasks(args):
-    with open(args.games) as f:
-        games = json.load(f)
+    games = []
+    for path in args.games:
+        with open(path) as f:
+            games += json.load(f)
     # Positions already evaluated in an earlier round are not re-run.
     done = set()
     for path in args.skip or []:
         with open(path) as f:
             done |= {(t["key"], t["opponent"]) for t in json.load(f)}
-    seen = {}
+    seen, freq = {}, {}
     for g in games:
-        if g["outcome"] != "loss":
+        if g["outcome"] != "loss" and not args.any_outcome:
             continue
         a_color = 0 if g["a_black"] else 1
         hist = [tuple(m) for m in g["history"]]
-        for i in range(min(args.plies, len(hist))):
+        for i in range(args.min_ply, min(args.plies, len(hist))):
             if i % 2 != a_color:
                 continue
             board, color = replay([], hist, i)
-            key, _ = canonical(board)
+            key, tr = canonical(board)
             if (key, g["opponent"]) in done:
                 continue
+            freq[key] = freq.get(key, 0) + 1
             item = seen.setdefault((key, g["opponent"]), {
                 "key": key, "opponent": g["opponent"], "prefix": [list(m) for m in hist[:i]],
-                "color": color, "played": list(hist[i]), "losses": 0})
-            item["losses"] += 1
-    out = []
+                "color": color, "tr": tr, "seen": {}, "losses": 0})
+            item["losses"] += g["outcome"] == "loss"
+            # The move this game played, in the orientation of the stored prefix.
+            mv = TRANSFORMS[INVERSE[item["tr"]]](*TRANSFORMS[tr](*hist[i]))
+            item["seen"][mv] = item["seen"].get(mv, 0) + 1
+    out, npos = [], 0
     for item in seen.values():
+        if freq[item["key"]] < args.min_count:
+            continue
+        npos += 1
         board, color = replay([], [tuple(m) for m in item["prefix"]], len(item["prefix"]))
         cands = candidates_for(args.agent, board, color, args.k)
-        played = tuple(item["played"])
-        if played not in cands:
-            cands = [played] + cands
+        played_moves = sorted(item["seen"], key=item["seen"].get, reverse=True)
+        cands = [m for m in played_moves if m not in cands] + cands
+        base = {k: v for k, v in item.items() if k not in ("seen", "tr")}
+        base["played"] = list(played_moves[0])
         for mv in cands:
-            out.append({**item, "move": list(mv)})
+            out.append({**base, "move": list(mv)})
     with open(args.out, "w") as f:
         json.dump(out, f)
-    print(f"{len(seen)} positions, {len(out)} (position, move) tasks")
+    print(f"{npos} positions, {len(out)} (position, move) tasks")
 
 
 def run(args):
     with open(args.tasks) as f:
         items = json.load(f)
     shard, nshards = (int(x) for x in args.shard.split("/"))
+    clocks = clock_list(args)
     jobs, meta = [], []
     for ti, t in enumerate(items):
-        for ci, clock in enumerate(CLOCKS):
-            idx = ti * len(CLOCKS) + ci
+        for ci, clock in enumerate(clocks):
+            idx = ti * len(clocks) + ci
             if idx % nshards != shard:
                 continue
             opening = [tuple(m) for m in t["prefix"]] + [tuple(t["move"])]
@@ -207,19 +230,41 @@ def build(args):
     if os.path.exists(args.book):
         with open(args.book) as f:
             book = json.load(f)
-    report = []
+    report, confirm = [], {}
     for key, g in by_key.items():
         played = max(g["played"], key=g["played"].get)
         ps, pn = g["moves"].get(played, (0.0, 0))
         best, (bs, bn) = max(g["moves"].items(), key=lambda kv: kv[1][0] / max(1, kv[1][1]))
         line = (f"ply {g['ply']:2d} vs {','.join(sorted(g['opps'])):40s} played {played} {ps}/{pn}"
                 f"  best {best} {bs}/{bn}")
-        if (pn and best != played and bs / bn - ps / pn >= args.gain
-                and bs - ps * bn / pn >= args.margin):
+        if not pn or best == played or bs / bn - ps / pn < args.gain:
+            report.append(line)
+            continue
+        # One-sided two-proportion z score of best over played.
+        pool = (bs + ps) / (bn + pn)
+        z = (bs / bn - ps / pn) / max(1e-9, (pool * (1 - pool) * (1 / bn + 1 / pn)) ** 0.5)
+        line += f"  z {z:.2f}"
+        if args.confirm_out:
+            # Screening round: re-test best against played on fresh games.
+            confirm[key] = (best, played)
+            line += "  -> CONFIRM"
+        elif bs - ps * bn / pn >= args.margin and (args.z is None or z >= args.z):
             book[key] = list(best)
             line += "  -> BOOK"
         report.append(line)
+    if args.confirm_out:
+        keep = []
+        for t in items:
+            board, _ = replay([], [tuple(m) for m in t["prefix"]], len(t["prefix"]))
+            key, tr = canonical(board)
+            if key in confirm and TRANSFORMS[tr](*t["move"]) in confirm[key]:
+                keep.append({**t, "played": list(TRANSFORMS[INVERSE[tr]](*confirm[key][1]))})
+        with open(args.confirm_out, "w") as f:
+            json.dump(keep, f)
+        print(f"{len(confirm)} positions to confirm, {len(keep)} tasks -> {args.confirm_out}")
     print("\n".join(sorted(report)))
+    if args.confirm_out:
+        return
     with open(args.book, "w") as f:
         json.dump(book, f, indent=0)
     print(f"book entries: {len(book)}")
@@ -231,8 +276,9 @@ def import_digits(args):
     with open(args.tasks) as f:
         items = json.load(f)
     shard, nshards = (int(x) for x in args.shard.split("/"))
-    order = [(ti, clock) for ti in range(len(items)) for ci, clock in enumerate(CLOCKS)
-             if (ti * len(CLOCKS) + ci) % nshards == shard]
+    clocks = clock_list(args)
+    order = [(ti, clock) for ti in range(len(items)) for ci, clock in enumerate(clocks)
+             if (ti * len(clocks) + ci) % nshards == shard]
     digits = args.digits.strip()
     if len(digits) != len(order):
         sys.exit(f"length mismatch: {len(digits)} digits for {len(order)} games")
@@ -264,15 +310,21 @@ def main():
     ap.add_argument("--digits", help="import: the compact score string from a worker")
     ap.add_argument("--agent", default="agents/v13/smartplayerJRM.py")
     ap.add_argument("--pool", nargs="+", default=POOL)
-    ap.add_argument("--games", default="tuning/book_games.json")
+    ap.add_argument("--games", nargs="+", default=["tuning/book_games.json"])
     ap.add_argument("--tasks", default="tuning/book_tasks.json")
     ap.add_argument("--results", nargs="+", default=["tuning/book_res_*.json"])
     ap.add_argument("--book", default="tuning/book.json")
     ap.add_argument("--out")
     ap.add_argument("--plies", type=int, default=8, help="decisions within the first N plies")
     ap.add_argument("--skip", nargs="+", help="tasks: task files of earlier rounds whose positions to skip")
+    ap.add_argument("--any-outcome", action="store_true", help="tasks: use won games too, not only losses")
+    ap.add_argument("--min-count", type=int, default=1, help="tasks: positions seen at least this often")
+    ap.add_argument("--min-ply", type=int, default=0, help="tasks: skip decisions before this ply")
+    ap.add_argument("--z", type=float, help="build: also require this z score of best over played")
+    ap.add_argument("--confirm-out", help="build: write best-vs-played re-test tasks instead of a book")
     ap.add_argument("--k", type=int, default=5, help="engine candidates per position")
     ap.add_argument("--shard", default="0/1")
+    ap.add_argument("--clocks", help="run/import: comma-separated minutes (default: CLOCKS)")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--margin", type=float, default=2.0, help="wins needed over the played move")
     ap.add_argument("--gain", type=float, default=0.2, help="win-rate gain needed over the played move")
