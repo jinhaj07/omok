@@ -11,7 +11,7 @@ Examples (from the repository root):
     python3 tools/arena.py smart simple --games 8 --time 30 --jobs 1   # slow-machine check
 
 Player specs:
-    random | simple | smart[:key=value,...] | path/to/agent.py[:ClassName]
+    random | simple | smart[:key=value,...] | path/to/agent.py[:ClassName][@key=value,...]
     (a .py path loads any teammate's agent; the class defaults to the one
      whose name starts with SmartPlayer)
     smart options: params=<json file>, depth=<int>, nodes=<int>, movetime=<sec>,
@@ -78,9 +78,19 @@ def load_agent_class(path, class_name=None):
 
 
 def make_player(spec, color, nodes=None):
-    if spec.endswith(".py") or ".py:" in spec:
+    if spec.endswith(".py") or ".py:" in spec or ".py@" in spec:
+        spec, _, overrides = spec.partition("@")
         path, _, cls = spec.partition(".py")
-        return load_agent_class(path + ".py", cls.lstrip(":") or None)(color)
+        player = load_agent_class(path + ".py", cls.lstrip(":") or None)(color)
+        if overrides:
+            # path/agent.py@key=value,...: override entries of the agent's
+            # params dict and rebuild its engine, which reads them at start.
+            for item in overrides.split(","):
+                k, _, v = item.partition("=")
+                player.params[k] = float(v) if "." in v else int(v)
+            if hasattr(player, "engine"):
+                player.engine = type(player.engine)(player.params)
+        return player
     name, _, opts = spec.partition(":")
     if name == "random":
         return RandomPlayer(color)

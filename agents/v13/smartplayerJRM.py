@@ -991,16 +991,17 @@ class SmartPlayerJRM(PlayerJRM):
         self.last_search = {}
 
     def _budget(self, remaining, stones, pressure):
-        expected = max(16, 28 - self.moves_played // 2)
-        base = 2.0 if remaining is None else min(2.4, remaining / expected)
-        hard = min(3.2, base * (1.25 if pressure else 1.0))
+        ts = self.params.get('tscale', 1.0)
+        expected = max(16, 28 - self.moves_played // 2) / ts
+        base = 2.0 if remaining is None else min(2.4 * ts, remaining / expected)
+        hard = min(3.2 * ts, base * (1.25 if pressure else 1.0))
         if remaining is not None:
             hard = min(hard, max(0.001, remaining * 0.85 - 0.025))
         if stones <= 2:
             hard = min(hard, 0.4)
         elif stones <= 5:
             hard = min(hard, 1.0)
-        return max(0.001, hard * 0.6), max(0.001, hard)
+        return max(0.001, hard * self.params.get('tsoftf', 0.6)), max(0.001, hard)
 
     def take_turn(self, board, time):
         started = _now()
