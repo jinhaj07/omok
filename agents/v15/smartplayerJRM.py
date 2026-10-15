@@ -1355,10 +1355,12 @@ class SmartPlayerJRM(PlayerJRM):
             raise ValueError('color must be 0 (black) or 1 (white)')
         self.params = dict(DEFAULT_PARAMS)
         self.params.update({'root_width': 24, 'width': 12})
-        # v15 (JangJinha) switches, off by default until A/B-tested:
-        # knight = white's first reply a knight's move from black's stone,
-        # book = opening book from v13/v14, tscale = scale on the time budget.
-        self.params.update({'knight': 0, 'book': 0, 'tscale': 1.0})
+        # v15 (JangJinha) switches: knight = white's first reply a knight's
+        # move from black's stone, book = opening book from v13/v14, tscale =
+        # scale on the time budget. A/B cycle 6 (3,600 games vs the team pool):
+        # knight raised white's score 0.48 -> 0.64; book, tscale 1.25 and
+        # width 14 gave nothing more, so only knight is on.
+        self.params.update({'knight': 1, 'book': 0, 'tscale': 1.0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
