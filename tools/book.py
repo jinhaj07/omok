@@ -206,6 +206,24 @@ def build(args):
     print(f"book entries: {len(book)}")
 
 
+def import_digits(args):
+    """Rebuild a shard's rows from a compact score string ('1' win, 'h' draw,
+    '0' loss) in the shard's fixed job order, as reported by a remote worker."""
+    with open(args.tasks) as f:
+        items = json.load(f)
+    shard, nshards = (int(x) for x in args.shard.split("/"))
+    order = [(ti, clock) for ti in range(len(items)) for ci, clock in enumerate(CLOCKS)
+             if (ti * len(CLOCKS) + ci) % nshards == shard]
+    digits = args.digits.strip()
+    if len(digits) != len(order):
+        sys.exit(f"length mismatch: {len(digits)} digits for {len(order)} games")
+    value = {"1": 1.0, "h": 0.5, "0": 0.0}
+    rows = [{"task": ti, "clock": clock, "score": value[d]} for (ti, clock), d in zip(order, digits)]
+    with open(args.out, "w") as f:
+        json.dump(rows, f)
+    print(f"shard {args.shard}: {len(rows)} rows, score {sum(r['score'] for r in rows)}")
+
+
 def embed(args):
     """Write tuning/book.json into the agent file between the BOOK markers."""
     with open(args.book) as f:
@@ -223,7 +241,8 @@ def embed(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["collect", "tasks", "run", "build", "embed"])
+    ap.add_argument("mode", choices=["collect", "tasks", "run", "build", "embed", "import"])
+    ap.add_argument("--digits", help="import: the compact score string from a worker")
     ap.add_argument("--agent", default="agents/v13/smartplayerJRM.py")
     ap.add_argument("--pool", nargs="+", default=POOL)
     ap.add_argument("--games", default="tuning/book_games.json")
@@ -237,7 +256,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--margin", type=float, default=2.0, help="wins needed over the played move")
     args = ap.parse_args()
-    {"collect": collect, "tasks": tasks, "run": run, "build": build, "embed": embed}[args.mode](args)
+    {"collect": collect, "tasks": tasks, "run": run, "build": build, "embed": embed,
+     "import": import_digits}[args.mode](args)
 
 
 if __name__ == "__main__":
