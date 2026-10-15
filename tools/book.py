@@ -102,6 +102,11 @@ def candidates_for(agent, board, color, k):
 def tasks(args):
     with open(args.games) as f:
         games = json.load(f)
+    # Positions already evaluated in an earlier round are not re-run.
+    done = set()
+    for path in args.skip or []:
+        with open(path) as f:
+            done |= {(t["key"], t["opponent"]) for t in json.load(f)}
     seen = {}
     for g in games:
         if g["outcome"] != "loss":
@@ -113,6 +118,8 @@ def tasks(args):
                 continue
             board, color = replay([], hist, i)
             key, _ = canonical(board)
+            if (key, g["opponent"]) in done:
+                continue
             item = seen.setdefault((key, g["opponent"]), {
                 "key": key, "opponent": g["opponent"], "prefix": [list(m) for m in hist[:i]],
                 "color": color, "played": list(hist[i]), "losses": 0})
@@ -159,6 +166,8 @@ def run(args):
     # Compact one-line result, so a remote worker can report it in chat.
     print("RESULT " + json.dumps({"shard": args.shard, "rows": [[r["task"], r["clock"], r["score"]] for r in out]},
                                  separators=(",", ":")))
+    # Shorter form of the same rows, in job order (see the import mode).
+    print(f"DIGITS {args.shard} " + "".join({1.0: "1", 0.5: "h", 0.0: "0"}[r["score"]] for r in out))
 
 
 def build(args):
@@ -261,6 +270,7 @@ def main():
     ap.add_argument("--book", default="tuning/book.json")
     ap.add_argument("--out")
     ap.add_argument("--plies", type=int, default=8, help="decisions within the first N plies")
+    ap.add_argument("--skip", nargs="+", help="tasks: task files of earlier rounds whose positions to skip")
     ap.add_argument("--k", type=int, default=5, help="engine candidates per position")
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--jobs", type=int, default=4)
