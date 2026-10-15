@@ -233,6 +233,10 @@ def build(args):
     report, confirm = [], {}
     for key, g in by_key.items():
         played = max(g["played"], key=g["played"].get)
+        # Games from before a book entry existed recorded the engine's old
+        # move; the baseline to beat is what the agent plays now.
+        if key in book and tuple(book[key]) in g["moves"]:
+            played = tuple(book[key])
         ps, pn = g["moves"].get(played, (0.0, 0))
         best, (bs, bn) = max(g["moves"].items(), key=lambda kv: kv[1][0] / max(1, kv[1][1]))
         line = (f"ply {g['ply']:2d} vs {','.join(sorted(g['opps'])):40s} played {played} {ps}/{pn}"
