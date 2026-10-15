@@ -1,0 +1,55 @@
+{
+  "baseline_games": 60,
+  "baseline_wins": 39,
+  "baseline_losses": 21,
+  "losses_by_hybrid_color": {
+    "white": 18,
+    "black": 3
+  },
+  "search_phases_above_50ms": {
+    "alpha-beta": 802,
+    "verified-forcing-win": 2
+  },
+  "mean_completed_depth_above_50ms": 5.914179104477612,
+  "profile_note": "On one recorded JangJinha loss position, cProfile attributed 1.16/2.20 seconds cumulatively to score_moves, and 0.74 seconds to initial VCT scouting. Instrumentation affects timings; these are cumulative and not additive.",
+  "line_equivalence_patterns_checked": 39159,
+  "line_benchmark": {
+    "previous": {
+      "seconds": [
+        1.4517218609998963,
+        1.332348281999657,
+        2.18740538900056
+      ],
+      "median_seconds": 1.4517218609998963
+    },
+    "v2": {
+      "seconds": [
+        1.0254770109995661,
+        0.3213373580001644,
+        0.36257800699968357
+      ],
+      "median_seconds": 0.36257800699968357
+    },
+    "speedup": 4.003888357743561,
+    "patterns": 2500
+  },
+  "evaluation_screen": {
+    "original_weights": {
+      "Hybrid_v1": {
+        "games": 6,
+        "wins": 5,
+        "losses": 1,
+        "draws": 0
+      }
+    },
+    "balanced_weights": {
+      "Hybrid_v1": {
+        "games": 6,
+        "wins": 4,
+        "losses": 2,
+        "draws": 0
+      }
+    }
+  },
+  "selected_evaluation": "original weights; pilot 5-1 vs balanced 4-2; limited sample, no claimed optimality"
+}

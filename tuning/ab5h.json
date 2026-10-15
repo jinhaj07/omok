@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "v14": "agents/v13/smartplayerJRM.py"
+  },
+  "pool": ["agents/geonwoo4_hybrid2/smartplayerJRM.py"],
+  "clocks": [0.5, 1.5, 36],
+  "reps": 6
+}

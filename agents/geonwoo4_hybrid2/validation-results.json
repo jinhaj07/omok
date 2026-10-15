@@ -1,0 +1,79 @@
+{
+  "metadata": {
+    "games_per_opponent": 6,
+    "clock_seconds_per_player": 60,
+    "openings": [
+      [],
+      [
+        [
+          9,
+          9
+        ],
+        [
+          8,
+          8
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      [
+        [
+          9,
+          9
+        ],
+        [
+          9,
+          10
+        ],
+        [
+          8,
+          9
+        ]
+      ]
+    ],
+    "colors": "one game per color for each of three starts",
+    "names": {
+      "Hybrid": "Hybrid v2",
+      "Hybrid_v1": "original uploaded hybrid"
+    },
+    "source_sha256": {
+      "Hybrid": "2ec0f7bfc348c9a3c5b295205c8c3e3b44741abf557c7f160fe0bd03f8dbe07e",
+      "Hybrid_v1": "af85bebf969421ddb98aaad49b6d511a61e4d723a4188d798bf210d4b642eb6f",
+      "Geonwoo2": "844f6e6238b3af1f10fb407606cf2d2dd7da559ad46fafbf1dda8dc1e22758e8",
+      "Minjun_v3": "6d20a2f1aec1ed9f85260a839910a081e410f52ad936bbb8cfb04cb75490f053",
+      "JangJinha_v11": "13b148506f9801a15fa3f0edcb19aff5c6743ddbcb112e5019d3c0a482b85449"
+    },
+    "execution": "four concurrent pairings on separate CPU cores; fresh modules and agents each game"
+  },
+  "unit_tests_passed": 23,
+  "all_games_replayed": true,
+  "forfeits": 0,
+  "summary": {
+    "Geonwoo2": {
+      "games": 6,
+      "wins": 6,
+      "losses": 0,
+      "draws": 0
+    },
+    "Hybrid_v1": {
+      "games": 6,
+      "wins": 4,
+      "losses": 2,
+      "draws": 0
+    },
+    "JangJinha_v11": {
+      "games": 6,
+      "wins": 4,
+      "losses": 2,
+      "draws": 0
+    },
+    "Minjun_v3": {
+      "games": 6,
+      "wins": 6,
+      "losses": 0,
+      "draws": 0
+    }
+  }
+}
