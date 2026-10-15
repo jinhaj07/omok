@@ -985,7 +985,10 @@ class SmartPlayerJRM(PlayerJRM):
         if color not in (0, 1):
             raise ValueError('color must be 0 (black) or 1 (white)')
         self.params = dict(DEFAULT_PARAMS)
-        self.params.update({'root_width': 24, 'tmax': 2.4})
+        # v14 (JangJinha): 1.5x thinking time and inner search width 14, chosen
+        # by A/B tests of 1152 games per setting against v12, Geonwoo2/3 and
+        # Minjun v3 (0.58 -> 0.64; Geonwoo v3 0.38 -> 0.51).
+        self.params.update({'root_width': 24, 'tmax': 2.4, 'tscale': 1.5, 'width': 14})
         self.engine = _HybridEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
