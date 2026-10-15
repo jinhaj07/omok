@@ -178,26 +178,36 @@ def build(args):
             s = totals.setdefault(r["task"], [0.0, 0])
             s[0] += r["score"]
             s[1] += 1
-    by_pos = {}
+    # Group by canonical position across opponents: a position reached
+    # against several opponents gets one entry, chosen on the combined games.
+    by_key = {}
     for ti, t in enumerate(items):
-        if ti in totals:
-            by_pos.setdefault((t["key"], t["opponent"]), []).append((t, totals[ti]))
+        if ti not in totals:
+            continue
+        board, _ = replay([], [tuple(m) for m in t["prefix"]], len(t["prefix"]))
+        key, tr = canonical(board)
+        move = TRANSFORMS[tr](*t["move"])
+        played = TRANSFORMS[tr](*t["played"])
+        g = by_key.setdefault(key, {"moves": {}, "played": {}, "ply": len(t["prefix"]), "opps": set()})
+        m = g["moves"].setdefault(move, [0.0, 0])
+        m[0] += totals[ti][0]
+        m[1] += totals[ti][1]
+        g["played"][played] = g["played"].get(played, 0) + 1
+        g["opps"].add(t["opponent"].split("/")[1])
     book = {}
     if os.path.exists(args.book):
         with open(args.book) as f:
             book = json.load(f)
     report = []
-    for (key, opp), rows in by_pos.items():
-        played = next((s for t, s in rows if t["move"] == t["played"]), None)
-        best_t, best_s = max(rows, key=lambda x: x[1][0] / max(1, x[1][1]))
-        line = f"{opp.split('/')[1]:9s} ply {len(best_t['prefix']):2d} played {tuple(best_t['played'])} " \
-               f"{played[0] if played else '?'}/{played[1] if played else '?'}  best {tuple(best_t['move'])} " \
-               f"{best_s[0]}/{best_s[1]}"
-        if played is not None and best_t["move"] != best_t["played"] and best_s[0] >= played[0] + args.margin:
-            board, _ = replay([], [tuple(m) for m in best_t["prefix"]], len(best_t["prefix"]))
-            k, ti = canonical(board)
-            r, c = TRANSFORMS[ti](*best_t["move"])
-            book[k] = [r, c]
+    for key, g in by_key.items():
+        played = max(g["played"], key=g["played"].get)
+        ps, pn = g["moves"].get(played, (0.0, 0))
+        best, (bs, bn) = max(g["moves"].items(), key=lambda kv: kv[1][0] / max(1, kv[1][1]))
+        line = (f"ply {g['ply']:2d} vs {','.join(sorted(g['opps'])):40s} played {played} {ps}/{pn}"
+                f"  best {best} {bs}/{bn}")
+        if (pn and best != played and bs / bn - ps / pn >= args.gain
+                and bs - ps * bn / pn >= args.margin):
+            book[key] = list(best)
             line += "  -> BOOK"
         report.append(line)
     print("\n".join(sorted(report)))
@@ -255,6 +265,7 @@ def main():
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--margin", type=float, default=2.0, help="wins needed over the played move")
+    ap.add_argument("--gain", type=float, default=0.2, help="win-rate gain needed over the played move")
     args = ap.parse_args()
     {"collect": collect, "tasks": tasks, "run": run, "build": build, "embed": embed,
      "import": import_digits}[args.mode](args)
