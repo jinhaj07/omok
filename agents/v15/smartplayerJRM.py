@@ -1089,6 +1089,7 @@ class _FastSearcher(_Searcher):
         self.noise = None
         self.text = engine.p.get('text', 0)
         self.use_partial = engine.p.get('partial', 0)
+        self.istop = engine.p.get('istop', 0)
         self.partial = None
         self.partial_used = None
 
@@ -1282,6 +1283,7 @@ class _FastSearcher(_Searcher):
         if len(moves) == 1:
             return moves[0], 0, 0
         best_move, best_score, done = moves[0], -2 * WIN, 0
+        last_t = 0.0
         for depth in range(1, max_depth + 1):
             # First complete a cheap iteration before expanding tactical leaves.
             self.qleft = 0 if depth == 1 else 8
@@ -1304,7 +1306,7 @@ class _FastSearcher(_Searcher):
             unstable = done > 0 and (move != best_move or score < best_score - 300)
             best_move, best_score, done = move, score, depth
             self.root_scores = scores
-            self.iterations.append({'depth': depth, 'move': divmod(move, SIZE), 'score': score})
+            self.iterations.append({'depth': depth, 'move': divmod(move, SIZE), 'score': score, 't': time.monotonic() - start})
             moves.sort(key=lambda p: (p == best_move, scores.get(p, -3 * WIN)), reverse=True)
             self.root_order = list(moves)
             if best_score >= WIN - 1000:
@@ -1316,12 +1318,19 @@ class _FastSearcher(_Searcher):
                 if len(wider) > len(moves):
                     moves = list(dict.fromkeys(moves + wider))
                     self.root_order = list(moves)
-            if time.monotonic() - start >= soft_time:
+            now = time.monotonic() - start
+            if now >= soft_time:
                 if unstable and not self.extended:
                     soft_time = max(soft_time, (self.deadline - start) * 0.9)
                     self.extended = True
                 else:
                     break
+            # v15: istop = do not start an iteration that would not finish
+            # before the deadline even if it took only istop times as long
+            # as the one just finished; the time saved stays on the clock.
+            if self.istop and now + self.istop * (now - last_t) > self.deadline - start:
+                break
+            last_t = now
         return best_move, best_score, done
 
 
@@ -1429,6 +1438,8 @@ class SmartPlayerJRM(PlayerJRM):
         # partial = use a better move proved by an unfinished last iteration.
         self.params.update({'partial': 0})
         self.params.update({'emin': 0})
+        # istop = early stop factor for iterative deepening (0 = off).
+        self.params.update({'istop': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
