@@ -1,0 +1,13 @@
+{
+  "variants": {
+    "base": "agents/v15/smartplayerJRM.py",
+    "ts15": "agents/v15/smartplayerJRM.py@tscale=1.5",
+    "ts20": "agents/v15/smartplayerJRM.py@tscale=2.0",
+    "text2": "agents/v15/smartplayerJRM.py@text=2"
+  },
+  "pool": ["omok-agent/smartplayerJangJinha.py", "agents/geonwoo3/smartplayerJRM.py",
+           "agents/geonwoo2/smartplayerJRM.py", "agents/minjun3/smartplayerJRM.py",
+           "agents/geonwoo4_hybrid2/smartplayerJRM.py"],
+  "clocks": [1.0, 1.0, 2],
+  "reps": 32
+}

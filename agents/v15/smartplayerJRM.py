@@ -1087,6 +1087,7 @@ class _FastSearcher(_Searcher):
         self.extended = False
         self.qleft = 8
         self.noise = None
+        self.text = engine.p.get('text', 0)
 
     def ordered(self, me, ply, tt_move=None, width=None):
         features = self.e.features(me)
@@ -1165,7 +1166,13 @@ class _FastSearcher(_Searcher):
         if e.strict_wins(me):
             return WIN - ply - 1
         if depth <= 0:
-            return self.quiet(alpha, beta, me, ply, self.qleft)
+            # v15: threat extension. While the opponent holds an open three
+            # (a threat line but no five-completing cell), search one more
+            # ply instead of standing pat, at most `text` times on a path.
+            if ext < self.text and e.T[enemy] and not e.NW[enemy]:
+                depth, ext = 1, ext + 1
+            else:
+                return self.quiet(alpha, beta, me, ply, self.qleft)
         threatened = bool(e.strict_wins(enemy))
         # The tactical budget is fixed for this search; separate table entries
         # from the inherited scout's different search/extension semantics.
@@ -1198,13 +1205,13 @@ class _FastSearcher(_Searcher):
                 value = self._after_move(me, ply + 1)
                 if value is None:
                     if index == 0:
-                        value = -self.negamax(depth - 1, -beta, -alpha, enemy, ply + 1)
+                        value = -self.negamax(depth - 1, -beta, -alpha, enemy, ply + 1, ext)
                     else:
                         # Values are floats. A one-point scout interval remains
                         # valid; any value above alpha is fully re-searched.
-                        value = -self.negamax(depth - 1, -alpha - 1.0, -alpha, enemy, ply + 1)
+                        value = -self.negamax(depth - 1, -alpha - 1.0, -alpha, enemy, ply + 1, ext)
                         if alpha < value < beta:
-                            value = -self.negamax(depth - 1, -beta, -alpha, enemy, ply + 1)
+                            value = -self.negamax(depth - 1, -beta, -alpha, enemy, ply + 1, ext)
             finally:
                 e.unmake(p, me, captured)
             if value > best:
@@ -1336,11 +1343,18 @@ _SYM_INV = (
 )
 
 
-def _book_move(board):
+# v15: moves found by long searches (15-30 s) for opening positions where the
+# in-game search (about 1 s) picks a different move; same key format as BOOK.
+DEEP_BOOK = {}
+
+
+def _book_move(board, book=None):
     """Book reply for this position (any rotation/reflection), else None.
     v13/v15 (JangJinha): entries were chosen by playing candidate moves out
     against the team's agents at many clock speeds (tools/book.py)."""
-    if not BOOK:
+    if book is None:
+        book = BOOK
+    if not book:
         return None
     pts = [(r, c, board[r][c]) for r in range(SIZE) for c in range(SIZE) if board[r][c] != EMPTY]
     if len(pts) > 16:
@@ -1351,7 +1365,7 @@ def _book_move(board):
         if best is None or img < best[0]:
             best = (img, i)
     key = ";".join("%d,%d,%d" % x for x in best[0])
-    move = BOOK.get(key)
+    move = book.get(key)
     if move is None:
         return None
     r, c = _SYM_INV[best[1]](*move)
@@ -1382,6 +1396,10 @@ class SmartPlayerJRM(PlayerJRM):
         # the board has at most rstones stones and no threats, so repeated
         # games against the same opponent do not all follow one line.
         self.params.update({'rnoise': 0, 'rstones': 6})
+        # dbook = use DEEP_BOOK (opening moves from long searches).
+        self.params.update({'dbook': 0})
+        # text = threat extensions per search path (see _FastSearcher.negamax).
+        self.params.update({'text': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1419,6 +1437,11 @@ class SmartPlayerJRM(PlayerJRM):
             booked = _book_move(board)
             if booked is not None:
                 self.last_search['phase'] = 'book'
+                return booked
+        if self.params.get('dbook'):
+            booked = _book_move(board, DEEP_BOOK)
+            if booked is not None:
+                self.last_search['phase'] = 'deep-book'
                 return booked
         if (self.params.get('knight') and len(legal) == NCELL - 1 and self.color == 1
                 and time is not None and 0 <= time < self.params.get('knight_below', 54.0) * 1000):
