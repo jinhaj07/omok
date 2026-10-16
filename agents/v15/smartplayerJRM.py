@@ -151,6 +151,7 @@ class _Engine:
     def __init__(self, params):
         self.p = params
         self.cache, self.compute = _line_info_factory(params)
+        self.fm_cache = {}
         self.tt = {}
         self.vtt = {}
         self.history = [0] * NCELL
@@ -410,8 +411,22 @@ class _Engine:
                     out.append(q)
         return out
 
-    def four_moves(self, me, cand):
+    def four_moves(self, me, cand=None):
         """Moves that give `me` a new way to complete five (fours).
+
+        v15: called without `cand`, the candidates are this position's full
+        neighbourhood and the result is memoised per position (half of the
+        calls in a search repeat a position)."""
+        if cand is None:
+            key = (self.h, me)
+            hit = self.fm_cache.get(key)
+            if hit is None:
+                hit = self.fm_cache[key] = tuple(self._four_moves(me, self.candidates()))
+            return list(hit)
+        return self._four_moves(me, cand)
+
+    def _four_moves(self, me, cand):
+        """four_moves for an explicit candidate list.
 
         v15 (JangJinha): the gain of every empty cell of a line is cached by
         the line's contents, so a call costs one lookup per line instead of
@@ -711,8 +726,7 @@ class _Searcher:
             return True
         if depth <= 0 or e.strict_wins(o):
             return False
-        cand = e.candidates()
-        for p in e.four_moves(me, cand)[:12]:
+        for p in e.four_moves(me)[:12]:
             cap = e.make(p, me)
             try:
                 ok = False
@@ -789,7 +803,7 @@ class _Searcher:
             replies = e.defences(d)
         else:
             replies = e.line_cells_near(three_at)
-            replies += e.four_moves(d, cand)
+            replies += e.four_moves(d)
         replies += e.capture_moves(d, cand)
         replies += e.strict_wins(d)
         for r in dict.fromkeys(replies):
@@ -830,7 +844,7 @@ class _Searcher:
         e = self.e
         if e.strict_wins(3 - me):
             return None
-        for p in e.four_moves(me, e.candidates())[:12]:
+        for p in e.four_moves(me)[:12]:
             cap = e.make(p, me)
             try:
                 res = self._after_move(me, 1)
@@ -947,7 +961,7 @@ class _ForcingVerifier:
             return True
         if left <= 0:
             return False
-        candidates = self.e.four_moves(attacker, self.e.candidates())[:8]
+        candidates = self.e.four_moves(attacker)[:8]
         for move in candidates:
             self.tick()
             captured = self.e.make(move, attacker)
@@ -1003,6 +1017,7 @@ class _FastEngine(_HybridEngine):
     def load(self, board):
         super().load(board)
         self.rank_cache.clear()
+        self.fm_cache.clear()
         if len(self.order_cache) > 180_000:
             self.order_cache.clear()
 
@@ -1142,7 +1157,7 @@ class _FastSearcher(_Searcher):
             alpha = max(alpha, stand)
             # Continue fours only; quiet open threes are handled by the main
             # search. No stand-pat is permitted while under an immediate threat.
-            moves = e.four_moves(me, e.candidates())[:8]
+            moves = e.four_moves(me)[:8]
             if not moves:
                 return stand
         if left <= -2:
