@@ -53,6 +53,8 @@ ZOBRIST_SIDE = _rng.getrandbits(64)
 
 class _TimeUp(Exception):
     pass
+# v15: game-to-game randomness (opening variety), seeded from the OS.
+_RAND = random.Random()
 _LINE_CACHES = {}
 # v15: per-line four gains, keyed by line contents and colour (see four_moves).
 _FOUR_LINES = {}
@@ -1081,6 +1083,7 @@ class _FastSearcher(_Searcher):
         self.tt_hits = 0
         self.extended = False
         self.qleft = 8
+        self.noise = None
 
     def ordered(self, me, ply, tt_move=None, width=None):
         features = self.e.features(me)
@@ -1217,20 +1220,28 @@ class _FastSearcher(_Searcher):
         e, enemy = self.e, 3 - me
         best, best_move = -2 * WIN, None
         scores = {}
+        noise = self.noise
         for index, p in enumerate(moves):
             self._tick()
+            # v15: opening variety. A fixed random bonus n per root move; the
+            # move is searched as if its value were value + n by shifting the
+            # window, so the choice is random among moves within the bonus
+            # range of the best (only used in quiet opening positions).
+            n = noise.get(p, 0.0) if noise else 0.0
+            a, b = alpha - n, beta - n
             captured = e.make(p, me)
             try:
                 value = self._after_move(me, 1)
                 if value is None:
                     if index == 0:
-                        value = -self.negamax(depth - 1, -beta, -alpha, enemy, 1)
+                        value = -self.negamax(depth - 1, -b, -a, enemy, 1)
                     else:
-                        value = -self.negamax(depth - 1, -alpha - 1.0, -alpha, enemy, 1)
-                        if alpha < value < beta:
-                            value = -self.negamax(depth - 1, -beta, -alpha, enemy, 1)
+                        value = -self.negamax(depth - 1, -a - 1.0, -a, enemy, 1)
+                        if a < value < b:
+                            value = -self.negamax(depth - 1, -b, -a, enemy, 1)
             finally:
                 e.unmake(p, me, captured)
+            value += n
             scores[p] = value
             if value > best:
                 best, best_move = value, p
@@ -1364,6 +1375,10 @@ class SmartPlayerJRM(PlayerJRM):
         # (white 11/200 vs 128/200 without it). Book, tscale 1.25 and width 14
         # gave nothing, so they stay off.
         self.params.update({'knight': 1, 'knight_below': 54.0, 'book': 0, 'tscale': 1.0})
+        # rnoise = random bonus range (evaluation units) on root moves while
+        # the board has at most rstones stones and no threats, so repeated
+        # games against the same opponent do not all follow one line.
+        self.params.update({'rnoise': 0, 'rstones': 6})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1469,6 +1484,9 @@ class SmartPlayerJRM(PlayerJRM):
                     else:
                         searcher.deadline = max(started, deadline - min(0.025, hard * 0.05))
                         searcher.preferred = hint
+                        rnoise = self.params.get('rnoise', 0)
+                        if rnoise and not pressure and e.stones <= self.params.get('rstones', 6):
+                            searcher.noise = {q: _RAND.random() * rnoise for q in range(NCELL)}
                         move, score, depth = searcher.root(me, 20, soft, started)
                         if move is not None:
                             best = move
