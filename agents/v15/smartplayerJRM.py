@@ -1356,11 +1356,14 @@ class SmartPlayerJRM(PlayerJRM):
         self.params = dict(DEFAULT_PARAMS)
         self.params.update({'root_width': 24, 'width': 12})
         # v15 (JangJinha) switches: knight = white's first reply a knight's
-        # move from black's stone, book = opening book from v13/v14, tscale =
-        # scale on the time budget. A/B cycle 6 (3,600 games vs the team pool):
-        # knight raised white's score 0.48 -> 0.64; book, tscale 1.25 and
-        # width 14 gave nothing more, so only knight is on.
-        self.params.update({'knight': 1, 'book': 0, 'tscale': 1.0})
+        # move from black's stone, used only while white's clock is below
+        # knight_below seconds; book = opening book from v13/v14; tscale =
+        # scale on the time budget. A/B cycles 6-10 (team pool): the knight
+        # reply lifts white below 0.9 min (0.5-0.75 min: 114/135 vs 41/135)
+        # but not at 0.9-1.1 min, and at exactly 1 min it loses to Hybrid v2
+        # (white 11/200 vs 128/200 without it). Book, tscale 1.25 and width 14
+        # gave nothing, so they stay off.
+        self.params.update({'knight': 1, 'knight_below': 54.0, 'book': 0, 'tscale': 1.0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1399,7 +1402,8 @@ class SmartPlayerJRM(PlayerJRM):
             if booked is not None:
                 self.last_search['phase'] = 'book'
                 return booked
-        if self.params.get('knight') and len(legal) == NCELL - 1 and self.color == 1:
+        if (self.params.get('knight') and len(legal) == NCELL - 1 and self.color == 1
+                and time is not None and 0 <= time < self.params.get('knight_below', 54.0) * 1000):
             # White's first reply: a knight's move from black's stone, toward
             # the centre (v13/v14 measurement: best first reply for this engine
             # family against the team's other agents).
