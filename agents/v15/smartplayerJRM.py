@@ -1361,9 +1361,15 @@ _SYM_INV = (
 )
 
 
-# v15: moves found by long searches (15-30 s) for opening positions where the
-# in-game search (about 1 s) picks a different move; same key format as BOOK.
-DEEP_BOOK = {}
+# v15: opening positions where the in-game move was replaced by a candidate
+# that did better when played out against the team's agents; same key format
+# as BOOK. Entry 1: B(9,9) W(10,9) B(10,10) W(8,8) B(11,11) W(8,7) B(8,6)
+# W(8,9) B(8,10), white to move. With tscale 2.0 the search picks (11,10)
+# (and loses to Hybrid v2 at 0.9-1.1 min, 1/5); played out against 5 agents x
+# 5 clocks, (10,8) won 19/25 vs 16/25 for (11,10) (Hybrid v2 5/5 vs 2/5).
+DEEP_BOOK = {
+    '6,8,0;7,8,1;8,8,1;9,8,1;9,9,0;9,10,1;10,8,0;10,10,0;11,11,0': (8, 10),
+}
 
 
 def _book_move(board, book=None):
@@ -1422,6 +1428,7 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'text': 0})
         # partial = use a better move proved by an unfinished last iteration.
         self.params.update({'partial': 0})
+        self.params.update({'emin': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1429,6 +1436,9 @@ class SmartPlayerJRM(PlayerJRM):
     def _budget(self, remaining, stones, pressure):
         ts = self.params.get('tscale', 1.0)
         expected = max(14, 24 - self.moves_played // 2) / ts
+        # emin = floor on the expected number of remaining moves (keeps time
+        # for long games when tscale is large); 0 = no floor.
+        expected = max(expected, self.params.get('emin', 0))
         base = 2.0 if remaining is None else min(3.0 * ts, remaining / expected)
         hard = min(4.0 * ts, base * (1.35 if pressure else 1.05))
         if remaining is not None:

@@ -1,0 +1,13 @@
+{
+  "variants": {
+    "base": "agents/v15/smartplayerJRM.py",
+    "db": "agents/v15/smartplayerJRM.py@dbook=1",
+    "em10": "agents/v15/smartplayerJRM.py@emin=10",
+    "em12": "agents/v15/smartplayerJRM.py@emin=12"
+  },
+  "pool": ["omok-agent/smartplayerJangJinha.py", "agents/geonwoo3/smartplayerJRM.py",
+           "agents/geonwoo2/smartplayerJRM.py", "agents/minjun3/smartplayerJRM.py",
+           "agents/geonwoo4_hybrid2/smartplayerJRM.py"],
+  "clocks": [0.9, 1.1, 5],
+  "reps": 13
+}
