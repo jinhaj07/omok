@@ -1,0 +1,11 @@
+{
+  "variants": {
+    "old": "tuning/v15_ef2d3ef/smartplayerJRM.py",
+    "fast": "agents/v15/smartplayerJRM.py"
+  },
+  "pool": ["omok-agent/smartplayerJangJinha.py", "agents/geonwoo3/smartplayerJRM.py",
+           "agents/geonwoo2/smartplayerJRM.py", "agents/minjun3/smartplayerJRM.py",
+           "agents/geonwoo4_hybrid2/smartplayerJRM.py"],
+  "clocks": [0.9, 1.1, 5],
+  "reps": 26
+}
