@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "v15": "tuning/v15_final/smartplayerJRM.py"
+  },
+  "pool": ["agents/codexC/smartplayerJRM.py"],
+  "clocks": [0.9, 1.1, 5],
+  "reps": 104
+}
