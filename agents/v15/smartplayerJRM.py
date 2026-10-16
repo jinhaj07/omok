@@ -5,6 +5,8 @@ Geonwoo2/Minjun v3 safety and proof ideas. The JangJinha source credits Claude
 Code and team review. Review the code and declare assistance per course rules.
 Version 2 adds cached ordering, PVS, tactical quiescence and completed-iteration
 selection, with loss-position regression checks and measured match validation.
+The bounded quiescence table (qtt) comes from a Codex (OpenAI) candidate made
+by Jinha Jang; Claude Code merged it as a switch and A/B tested it.
 """
 import random
 import time
@@ -1093,8 +1095,8 @@ class _FastSearcher(_Searcher):
         self.partial_used = None
         # qdepth = tactical (quiescence) budget after the first iteration.
         self.qdepth = engine.p.get('qdepth', 8)
-        # qtt = per-search table of quiescence bounds (Codex candidate C,
-        # bounded to 32,768 entries); off = quiet() is the plain search.
+        # qtt = per-search table of quiescence bounds (from Codex candidate C),
+        # bounded to qtt entries; qtt = 0 makes quiet() the plain search.
         self.qtt = {}
         self.qtt_limit = int(engine.p.get('qtt', 0))
         if not self.qtt_limit:
@@ -1456,7 +1458,10 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'partial': 0})
         self.params.update({'emin': 0})
         # qdepth = quiescence depth (8); qtt = quiescence table size (0 = off).
-        self.params.update({'qdepth': 8, 'qtt': 0})
+        # A/B cycles 20-21: qtt 32,768 won 1260/1500 vs 1211/1500 without it
+        # (z 2.35); 131,072 won 718/850 vs 710/850 for 32,768 and is never
+        # full in a 1-minute game (at most ~60k entries per move).
+        self.params.update({'qdepth': 8, 'qtt': 131072})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
