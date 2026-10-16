@@ -76,7 +76,10 @@ def _line_info_factory(params):
     weights = (0.0, params['w1'], params['w2'], params['w3'], params['w4'])
     capw = params['cap']
     o3w = params['o3']
-    key = (weights, capw, o3w)
+    # v15: weight of a pair the opponent can capture next move (x O O _), in
+    # units of the capture weight; Hybrid v2 used 0.45.
+    vulnw = params.get('vulnw', 0.45)
+    key = (weights, capw, o3w, vulnw)
     cache = _LINE_CACHES.setdefault(key, {})
 
     def compute(k):
@@ -136,7 +139,7 @@ def _line_info_factory(params):
                 if cells[i + 1] == x and cells[i + 2] == x:
                     if cells[i] == o and cells[i + 3] == 0 or (cells[i] == 0 and cells[i + 3] == o):
                         vulnerable += 1
-            score -= 0.45 * capw * vulnerable
+            score -= vulnw * capw * vulnerable
             out.append((score + capw * caps + o3w * open3, five, len(wins), tuple(sorted(wins)), threat))
         info = (out[0][0], out[1][0], out[0][1], out[1][1], out[0][2], out[1][2], out[0][3], out[1][3], out[0][4], out[1][4])
         cache[k] = info
