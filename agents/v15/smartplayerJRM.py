@@ -1088,6 +1088,9 @@ class _FastSearcher(_Searcher):
         self.qleft = 8
         self.noise = None
         self.text = engine.p.get('text', 0)
+        self.use_partial = engine.p.get('partial', 0)
+        self.partial = None
+        self.partial_used = None
 
     def ordered(self, me, ply, tt_move=None, width=None):
         features = self.e.features(me)
@@ -1231,6 +1234,8 @@ class _FastSearcher(_Searcher):
         best, best_move = -2 * WIN, None
         scores = {}
         noise = self.noise
+        self.partial = None
+        alpha0 = alpha
         for index, p in enumerate(moves):
             self._tick()
             # v15: opening variety. A fixed random bonus n per root move; the
@@ -1253,8 +1258,15 @@ class _FastSearcher(_Searcher):
                 e.unmake(p, me, captured)
             value += n
             scores[p] = value
+            if index == 0:
+                first = value
             if value > best:
                 best, best_move = value, p
+                if index > 0 and alpha0 < first < beta:
+                    # A later move fully searched above the first move's
+                    # exact value: better at this depth even if the
+                    # iteration is not finished.
+                    self.partial = p
             alpha = max(alpha, value)
             if alpha >= beta:
                 break
@@ -1282,7 +1294,13 @@ class _FastSearcher(_Searcher):
                     # A failed aspiration search is not a finished iteration.
                     move, score, scores = self.root_iteration(moves, me, depth, -2 * WIN, 2 * WIN)
             except _TimeUp:
-                break  # Keep the last FULLY completed iteration.
+                # Keep the last FULLY completed iteration, unless the switch
+                # `partial` is on and the unfinished one already proved a
+                # different move better than the previous best.
+                if self.use_partial and done and self.partial is not None and moves[0] == best_move:
+                    self.partial_used = divmod(self.partial, SIZE)
+                    best_move = self.partial
+                break
             unstable = done > 0 and (move != best_move or score < best_score - 300)
             best_move, best_score, done = move, score, depth
             self.root_scores = scores
@@ -1400,6 +1418,8 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'dbook': 0})
         # text = threat extensions per search path (see _FastSearcher.negamax).
         self.params.update({'text': 0})
+        # partial = use a better move proved by an unfinished last iteration.
+        self.params.update({'partial': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1542,7 +1562,8 @@ class SmartPlayerJRM(PlayerJRM):
                             'nodes': searcher.nodes + scout_nodes, 'qnodes': searcher.qnodes,
                             'tt_hits': searcher.tt_hits, 'proof_nodes': proof_nodes,
                             'seconds': _now() - started, 'soft_budget': soft, 'hard_budget': hard,
-                            'extended': searcher.extended, 'iterations': searcher.iterations}
+                            'extended': searcher.extended, 'iterations': searcher.iterations,
+                            'partial': searcher.partial_used}
         move = divmod(best, SIZE)
         return move if move in legal else fallback
 
