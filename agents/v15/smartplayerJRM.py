@@ -1091,6 +1091,14 @@ class _FastSearcher(_Searcher):
         self.use_partial = engine.p.get('partial', 0)
         self.partial = None
         self.partial_used = None
+        # qdepth = tactical (quiescence) budget after the first iteration.
+        self.qdepth = engine.p.get('qdepth', 8)
+        # qtt = per-search table of quiescence bounds (Codex candidate C,
+        # bounded to 32,768 entries); off = quiet() is the plain search.
+        self.qtt = {}
+        self.qtt_limit = int(engine.p.get('qtt', 0))
+        if not self.qtt_limit:
+            self.quiet = self._quiet_uncached
 
     def ordered(self, me, ply, tt_move=None, width=None):
         features = self.e.features(me)
@@ -1118,6 +1126,24 @@ class _FastSearcher(_Searcher):
         return value - ply if value > WIN - 1000 else value + ply if value < -WIN + 1000 else value
 
     def quiet(self, alpha, beta, me, ply, left):
+        """Quiescence with a bounded per-search table (only when qtt > 0;
+        otherwise __init__ binds quiet to _quiet_uncached)."""
+        key = (self.e.h, me, left)
+        entry = self.qtt.get(key)
+        if entry is not None:
+            flag, value = entry
+            value = self.unpack(value, ply)
+            if flag == 0 or flag == 1 and value >= beta or flag == 2 and value <= alpha:
+                self._tick()
+                self.qnodes += 1
+                return value
+        value = self._quiet_uncached(alpha, beta, me, ply, left)
+        if key in self.qtt or len(self.qtt) < self.qtt_limit:
+            flag = 1 if value >= beta else 2 if value <= alpha else 0
+            self.qtt[key] = (flag, self.pack(value, ply))
+        return value
+
+    def _quiet_uncached(self, alpha, beta, me, ply, left):
         self._tick()
         self.qnodes += 1
         e = self.e
@@ -1284,7 +1310,7 @@ class _FastSearcher(_Searcher):
         best_move, best_score, done = moves[0], -2 * WIN, 0
         for depth in range(1, max_depth + 1):
             # First complete a cheap iteration before expanding tactical leaves.
-            self.qleft = 0 if depth == 1 else 8
+            self.qleft = 0 if depth == 1 else self.qdepth
             lower, upper = -2 * WIN, 2 * WIN
             if done >= 2 and abs(best_score) < WIN - 1000:
                 lower, upper = best_score - 450, best_score + 450
@@ -1429,6 +1455,8 @@ class SmartPlayerJRM(PlayerJRM):
         # partial = use a better move proved by an unfinished last iteration.
         self.params.update({'partial': 0})
         self.params.update({'emin': 0})
+        # qdepth = quiescence depth (8); qtt = quiescence table size (0 = off).
+        self.params.update({'qdepth': 8, 'qtt': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
