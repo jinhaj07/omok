@@ -1407,9 +1407,11 @@ class SmartPlayerJRM(PlayerJRM):
         # scale on the time budget. A/B cycles 6-10 (team pool): the knight
         # reply lifts white below 0.9 min (0.5-0.75 min: 114/135 vs 41/135)
         # but not at 0.9-1.1 min, and at exactly 1 min it loses to Hybrid v2
-        # (white 11/200 vs 128/200 without it). Book, tscale 1.25 and width 14
-        # gave nothing, so they stay off.
-        self.params.update({'knight': 1, 'knight_below': 54.0, 'book': 0, 'tscale': 1.0})
+        # (white 11/200 vs 128/200 without it). Book and width 14 gave
+        # nothing, so they stay off. tscale 2.0 (A/B cycles 13-14, 0.9-1.1
+        # min): with 1.0 the agent used only 14-35 s of a 1-minute clock;
+        # 2.0 won 1049/1290 vs 1002/1290 (+3.6%, z 2.3), 1.5 and 3.0 did not.
+        self.params.update({'knight': 1, 'knight_below': 54.0, 'book': 0, 'tscale': 2.0})
         # rnoise = random bonus range (evaluation units) on root moves while
         # the board has at most rstones stones and no threats, so repeated
         # games against the same opponent do not all follow one line.
