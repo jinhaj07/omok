@@ -1,0 +1,19 @@
+{
+ "variants": {
+  "base": "agents/v15/smartplayerJRM.py"
+ },
+ "pool": [
+  "agents/geonwoo5/smartplayerJRM.py"
+ ],
+ "clocks": [
+  1.0,
+  1.0,
+  2
+ ],
+ "reps": 50,
+ "openings": [
+  2,
+  3
+ ],
+ "opening_seed": 51
+}
