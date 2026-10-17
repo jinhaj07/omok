@@ -1,0 +1,25 @@
+{
+ "variants": {
+  "base": "agents/v15/smartplayerJRM.py",
+  "s12": "agents/v16/smartplayerJRM.py@lmr=1,lmrs=12",
+  "s20": "agents/v16/smartplayerJRM.py@lmr=1,lmrs=20"
+ },
+ "pool": [
+  "omok-agent/smartplayerJangJinha.py",
+  "agents/geonwoo3/smartplayerJRM.py",
+  "agents/geonwoo2/smartplayerJRM.py",
+  "agents/minjun3/smartplayerJRM.py",
+  "agents/geonwoo4_hybrid2/smartplayerJRM.py",
+  "agents/codexC/smartplayerJRM.py",
+  "agents/jinha_v10/smartplayerJangJinha.py",
+  "agents/v13/smartplayerJRM.py",
+  "agents/jinha_v3/smartplayerJinhaJang.py",
+  "agents/geonwoo5/smartplayerJRM.py"
+ ],
+ "clocks": [
+  0.9,
+  1.1,
+  9
+ ],
+ "reps": 10
+}
