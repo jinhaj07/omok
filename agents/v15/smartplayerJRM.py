@@ -1463,8 +1463,9 @@ class SmartPlayerJRM(PlayerJRM):
         # full in a 1-minute game (at most ~60k entries per move).
         self.params.update({'qdepth': 8, 'qtt': 131072})
         # first = white's first reply at offset (fdr, fdc): 1 fixed, 2 random
-        # symmetry; 0 = search.
-        self.params.update({'first': 0, 'fdr': 1, 'fdc': 0, 'fsearch': 0})
+        # symmetry, 3 searched reply or (probability fmix) a random symmetry;
+        # 0 = search.
+        self.params.update({'first': 0, 'fdr': 1, 'fdc': 0, 'fsearch': 0, 'fmix': 0.5})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1522,20 +1523,27 @@ class SmartPlayerJRM(PlayerJRM):
                 self.last_search['phase'] = 'book'
                 return reply
         override = None
-        if self.params.get('first') and len(legal) == NCELL - 1 and self.color == 1:
+        mode = self.params.get('first')
+        if mode and len(legal) == NCELL - 1 and self.color == 1:
             # first = white's first reply at offset (fdr, fdc) from black's
             # stone, mirrored toward the centre (1), or turned by a random
             # board symmetry (2); 0 = search. fsearch = still run the usual
             # search (same clock use and tables as without the switch) and
-            # play the fixed reply instead of its move.
+            # play the fixed reply instead of its move. 3 = keep the searched
+            # reply, but with probability fmix play a random symmetry of the
+            # offset instead (search kept), so repeated games against a
+            # deterministic opponent do not all follow one line.
             r, c = next((r, c) for r in range(SIZE) for c in range(SIZE) if board[r][c] != EMPTY)
             dr, dc = self.params.get('fdr', 1), self.params.get('fdc', 0)
-            if self.params.get('first') == 2:
-                dr, dc = random.choice(sorted({(a * x, b * y) for x, y in ((dr, dc), (dc, dr))
-                                               for a in (1, -1) for b in (1, -1)}))
+            if mode >= 2:
+                turns = sorted({(a * x, b * y) for x, y in ((dr, dc), (dc, dr))
+                                for a in (1, -1) for b in (1, -1)})
+                dr, dc = (_RAND if mode == 3 else random).choice(turns)
             reply = (r - dr if r > 9 else r + dr, c - dc if c > 9 else c + dc)
-            if 0 <= reply[0] < SIZE and 0 <= reply[1] < SIZE and board[reply[0]][reply[1]] == EMPTY:
-                if self.params.get('fsearch'):
+            if mode == 3 and _RAND.random() >= self.params.get('fmix', 0.5):
+                reply = None
+            if reply and 0 <= reply[0] < SIZE and 0 <= reply[1] < SIZE and board[reply[0]][reply[1]] == EMPTY:
+                if self.params.get('fsearch') or mode == 3:
                     override = reply
                 else:
                     self.last_search['phase'] = 'book'
