@@ -35,12 +35,13 @@ def load(path):
 
 
 def jobs(cfg):
-    """All games in a fixed order: (variant, opponent, clock, variant_black)."""
+    """All games in a fixed order: (variant, opponent, clock, variant_black).
+    Optional "colours": [false] plays the variants as white only."""
     out = []
     for rep in range(cfg.get("reps", 1)):
         for clock in cfg["clock_list"]:
             for opp in cfg["pool"]:
-                for black in (True, False):
+                for black in cfg.get("colours", (True, False)):
                     for name in cfg["variants"]:
                         out.append((name, opp, clock, black))
     return out
