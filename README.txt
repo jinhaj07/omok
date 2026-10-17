@@ -60,4 +60,7 @@ per-line caches for speed.
 Time management: each move gets a share of the remaining clock (scaled so a
 1-minute game uses most of its time), with short caps on the first moves and
 a safety margin, so the agent never runs out of time. As white, the first
-reply is a knight's move from black's first stone when the clock is short.
+reply is a knight's move from black's first stone when the clock is short;
+otherwise it is the searched reply or, half of the time, a knight's move in
+a random direction, so repeated games against the same opponent do not all
+follow one line.

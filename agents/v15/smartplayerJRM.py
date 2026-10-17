@@ -1464,8 +1464,12 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'qdepth': 8, 'qtt': 131072})
         # first = white's first reply at offset (fdr, fdc): 1 fixed, 2 random
         # symmetry, 3 searched reply or (probability fmix) a random symmetry;
-        # 0 = search.
-        self.params.update({'first': 0, 'fdr': 1, 'fdc': 0, 'fsearch': 0, 'fmix': 0.5})
+        # 0 = search. A/B cycles 23-24 (white only, 20 fixed replies): with
+        # the search kept, no fixed reply beat the searched one, but against
+        # a deterministic opponent the four white games repeat one line.
+        # Searched reply or a random knight's move half the time: simulated
+        # 8-game pass rate 0.899 (worst opponent 0.71) vs 0.785 (0.28).
+        self.params.update({'first': 3, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
