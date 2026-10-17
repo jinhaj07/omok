@@ -62,5 +62,8 @@ Time management: each move gets a share of the remaining clock (scaled so a
 a safety margin, so the agent never runs out of time. As white, the first
 reply is a knight's move from black's first stone when the clock is short;
 otherwise it is the searched reply or, half of the time, a knight's move in
-a random direction, so repeated games against the same opponent do not all
-follow one line.
+a random direction. As black, the first stone is the centre or, half of the
+time, a random diagonal neighbour of it. Both keep repeated games against
+the same opponent from all following one line.
+An unexpected internal error never forfeits a game: the agent then plays an
+immediate win, blocks an immediate five, or takes the cell nearest the centre.

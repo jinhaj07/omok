@@ -1470,7 +1470,12 @@ class SmartPlayerJRM(PlayerJRM):
         # Searched reply or a random knight's move half the time: simulated
         # 8-game pass rate 0.899 (worst opponent 0.71) vs 0.785 (0.28).
         self.params.update({'first': 3, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
-        self.params.update({'bfirst': 0, 'bdr': 0, 'bdc': 1, 'bmix': 0.5})
+        # bfirst: A/B cycle 26 (black only, empty board): first stone at the
+        # centre 267/280, at the four diagonal neighbours 1086/1120 (0.970).
+        # Centre or (half the time) a random diagonal neighbour varies black's
+        # line too: simulated 8-game pass rate 0.908 vs 0.860 (deterministic
+        # opponents), 0.959 vs 0.958 (independent games).
+        self.params.update({'bfirst': 3, 'bdr': 1, 'bdc': 1, 'bmix': 0.5})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}

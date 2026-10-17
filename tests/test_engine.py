@@ -179,7 +179,10 @@ class PlayerTests(unittest.TestCase):
 
     def test_first_moves(self):
         b = empty_board()
-        self.assertEqual(sp.SmartPlayerJangJinha(0).take_turn(b, 60000), (9, 9))
+        # v15 opens at the centre or, half of the time, a diagonal neighbour.
+        for _ in range(20):
+            self.assertIn(sp.SmartPlayerJangJinha(0).take_turn(b, 60000),
+                          {(9, 9), (8, 8), (8, 10), (10, 8), (10, 10)})
         b[9][9] = 0
         r, c = sp.SmartPlayerJangJinha(1).take_turn(b, 60000)
         self.assertEqual(b[r][c], -1)
