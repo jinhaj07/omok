@@ -1,0 +1,41 @@
+{
+ "variants": {
+  "base": "agents/v15/smartplayerJRM.py",
+  "adj_10_9": "agents/v15/smartplayerJRM.py@first=1,fdr=1,fdc=0,fsearch=1",
+  "adj_8_9": "agents/v15/smartplayerJRM.py@first=1,fdr=-1,fdc=0,fsearch=1",
+  "adj_9_10": "agents/v15/smartplayerJRM.py@first=1,fdr=0,fdc=1,fsearch=1",
+  "adj_9_8": "agents/v15/smartplayerJRM.py@first=1,fdr=0,fdc=-1,fsearch=1",
+  "diag_10_10": "agents/v15/smartplayerJRM.py@first=1,fdr=1,fdc=1,fsearch=1",
+  "diag_10_8": "agents/v15/smartplayerJRM.py@first=1,fdr=1,fdc=-1,fsearch=1",
+  "diag_8_10": "agents/v15/smartplayerJRM.py@first=1,fdr=-1,fdc=1,fsearch=1",
+  "diag_8_8": "agents/v15/smartplayerJRM.py@first=1,fdr=-1,fdc=-1,fsearch=1",
+  "two_9_11": "agents/v15/smartplayerJRM.py@first=1,fdr=0,fdc=2,fsearch=1",
+  "two_9_7": "agents/v15/smartplayerJRM.py@first=1,fdr=0,fdc=-2,fsearch=1",
+  "two_11_9": "agents/v15/smartplayerJRM.py@first=1,fdr=2,fdc=0,fsearch=1",
+  "two_7_9": "agents/v15/smartplayerJRM.py@first=1,fdr=-2,fdc=0,fsearch=1",
+  "kn_7_8": "agents/v15/smartplayerJRM.py@first=1,fdr=-2,fdc=-1,fsearch=1",
+  "kn_7_10": "agents/v15/smartplayerJRM.py@first=1,fdr=-2,fdc=1,fsearch=1",
+  "kn_8_7": "agents/v15/smartplayerJRM.py@first=1,fdr=-1,fdc=-2,fsearch=1",
+  "kn_8_11": "agents/v15/smartplayerJRM.py@first=1,fdr=-1,fdc=2,fsearch=1",
+  "kn_10_7": "agents/v15/smartplayerJRM.py@first=1,fdr=1,fdc=-2,fsearch=1",
+  "kn_10_11": "agents/v15/smartplayerJRM.py@first=1,fdr=1,fdc=2,fsearch=1",
+  "kn_11_8": "agents/v15/smartplayerJRM.py@first=1,fdr=2,fdc=-1,fsearch=1",
+  "kn_11_10": "agents/v15/smartplayerJRM.py@first=1,fdr=2,fdc=1,fsearch=1"
+ },
+ "pool": [
+  "omok-agent/smartplayerJangJinha.py",
+  "agents/geonwoo3/smartplayerJRM.py",
+  "agents/geonwoo2/smartplayerJRM.py",
+  "agents/minjun3/smartplayerJRM.py",
+  "agents/geonwoo4_hybrid2/smartplayerJRM.py"
+ ],
+ "clocks": [
+  0.9,
+  1.1,
+  5
+ ],
+ "reps": 5,
+ "colours": [
+  false
+ ]
+}

@@ -1464,7 +1464,7 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'qdepth': 8, 'qtt': 131072})
         # first = white's first reply at offset (fdr, fdc): 1 fixed, 2 random
         # symmetry; 0 = search.
-        self.params.update({'first': 0, 'fdr': 1, 'fdc': 0})
+        self.params.update({'first': 0, 'fdr': 1, 'fdc': 0, 'fsearch': 0})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1521,10 +1521,13 @@ class SmartPlayerJRM(PlayerJRM):
             if 0 <= reply[0] < SIZE and 0 <= reply[1] < SIZE and board[reply[0]][reply[1]] == EMPTY:
                 self.last_search['phase'] = 'book'
                 return reply
+        override = None
         if self.params.get('first') and len(legal) == NCELL - 1 and self.color == 1:
             # first = white's first reply at offset (fdr, fdc) from black's
             # stone, mirrored toward the centre (1), or turned by a random
-            # board symmetry (2); 0 = search.
+            # board symmetry (2); 0 = search. fsearch = still run the usual
+            # search (same clock use and tables as without the switch) and
+            # play the fixed reply instead of its move.
             r, c = next((r, c) for r in range(SIZE) for c in range(SIZE) if board[r][c] != EMPTY)
             dr, dc = self.params.get('fdr', 1), self.params.get('fdc', 0)
             if self.params.get('first') == 2:
@@ -1532,8 +1535,11 @@ class SmartPlayerJRM(PlayerJRM):
                                                for a in (1, -1) for b in (1, -1)}))
             reply = (r - dr if r > 9 else r + dr, c - dc if c > 9 else c + dc)
             if 0 <= reply[0] < SIZE and 0 <= reply[1] < SIZE and board[reply[0]][reply[1]] == EMPTY:
-                self.last_search['phase'] = 'book'
-                return reply
+                if self.params.get('fsearch'):
+                    override = reply
+                else:
+                    self.last_search['phase'] = 'book'
+                    return reply
         remaining = None if time is None or time < 0 else float(time) / 1000
         if remaining is not None and remaining < 0.025:
             return fallback
@@ -1625,7 +1631,7 @@ class SmartPlayerJRM(PlayerJRM):
                             'seconds': _now() - started, 'soft_budget': soft, 'hard_budget': hard,
                             'extended': searcher.extended, 'iterations': searcher.iterations,
                             'partial': searcher.partial_used}
-        move = divmod(best, SIZE)
+        move = override or divmod(best, SIZE)
         return move if move in legal else fallback
 
 
