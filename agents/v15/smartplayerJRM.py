@@ -1470,6 +1470,7 @@ class SmartPlayerJRM(PlayerJRM):
         # Searched reply or a random knight's move half the time: simulated
         # 8-game pass rate 0.899 (worst opponent 0.71) vs 0.785 (0.28).
         self.params.update({'first': 3, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
+        self.params.update({'bfirst': 0, 'bdr': 0, 'bdc': 1, 'bmix': 0.5})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1496,6 +1497,28 @@ class SmartPlayerJRM(PlayerJRM):
         return max(0.001, hard * 0.67), max(0.001, hard)
 
     def take_turn(self, board, time):
+        """Course interface. An unexpected error never forfeits the game: the
+        agent then plays an immediate win, blocks an immediate five, or takes
+        the empty cell nearest the centre."""
+        try:
+            return self._take_turn(board, time)
+        except Exception:
+            legal = [(r, c) for r in range(SIZE) for c in range(SIZE) if board[r][c] == EMPTY]
+            if not legal:
+                raise
+            self.engine = _FastEngine(self.params)
+            try:
+                e = self.engine
+                e.clock = None
+                e.load(board)
+                for cells in (e.strict_wins(self.color + 1), e.strict_wins(2 - self.color)):
+                    if cells:
+                        return divmod(cells[0], SIZE)
+            except Exception:
+                pass
+            return min(legal, key=lambda rc: abs(rc[0] - 9) + abs(rc[1] - 9))
+
+    def _take_turn(self, board, time):
         started = _now()
         legal = [(r, c) for r in range(SIZE) for c in range(SIZE) if board[r][c] == EMPTY]
         if not legal:
@@ -1505,7 +1528,17 @@ class SmartPlayerJRM(PlayerJRM):
         self.last_search = {'phase': 'fallback', 'depth': 0, 'nodes': 0, 'proof_nodes': 0}
         if len(legal) == NCELL:
             self.last_search['phase'] = 'opening'
-            return 9, 9
+            # bfirst = black's first stone at offset (bdr, bdc) from the
+            # centre: 1 fixed, 3 the centre or (probability bmix) a random
+            # symmetry of the offset; 0 = the centre.
+            mode = self.params.get('bfirst')
+            dr, dc = self.params.get('bdr', 0), self.params.get('bdc', 1)
+            if mode == 3:
+                if _RAND.random() >= self.params.get('bmix', 0.5):
+                    return 9, 9
+                dr, dc = _RAND.choice(sorted({(a * x, b * y) for x, y in ((dr, dc), (dc, dr))
+                                              for a in (1, -1) for b in (1, -1)}))
+            return (9 + dr, 9 + dc) if mode else (9, 9)
         if self.params.get('book'):
             booked = _book_move(board)
             if booked is not None:

@@ -1,0 +1,32 @@
+{
+ "variants": {
+  "base": "agents/v15/smartplayerJRM.py",
+  "adj_10_9": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=1,bdc=0",
+  "adj_8_9": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=-1,bdc=0",
+  "adj_9_10": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=0,bdc=1",
+  "adj_9_8": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=0,bdc=-1",
+  "diag_10_10": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=1,bdc=1",
+  "diag_10_8": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=1,bdc=-1",
+  "diag_8_10": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=-1,bdc=1",
+  "diag_8_8": "agents/v15/smartplayerJRM.py@bfirst=1,bdr=-1,bdc=-1"
+ },
+ "pool": [
+  "omok-agent/smartplayerJangJinha.py",
+  "agents/geonwoo3/smartplayerJRM.py",
+  "agents/geonwoo2/smartplayerJRM.py",
+  "agents/minjun3/smartplayerJRM.py",
+  "agents/geonwoo4_hybrid2/smartplayerJRM.py",
+  "agents/codexC/smartplayerJRM.py",
+  "agents/jinha_v10/smartplayerJangJinha.py",
+  "agents/v13/smartplayerJRM.py"
+ ],
+ "clocks": [
+  0.9,
+  1.1,
+  5
+ ],
+ "reps": 7,
+ "colours": [
+  true
+ ]
+}
