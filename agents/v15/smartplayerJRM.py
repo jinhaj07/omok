@@ -1640,6 +1640,12 @@ class SmartPlayerJRM(PlayerJRM):
             e.vtt.clear()
         best, phase, score, depth = fallback[0] * SIZE + fallback[1], 'ordered', None, 0
         searcher = _FastSearcher(e)
+        if e.stones <= 1:
+            # White's first reply keeps the search without lmr: lmr changes it
+            # (e.g. (9,11) -> (7,8) after (9,9)), and the A/B cycles that
+            # adopted lmr all started from 2-3 stones, so only the old reply
+            # is measured (cycles 23-24; 16-0 against Geonwoo5 at 1 minute).
+            searcher.lmr = 0
         scout_nodes = proof_nodes = 0
         try:
             wins = e.strict_wins(me)
