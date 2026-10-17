@@ -50,8 +50,7 @@ All prompts and responses are included in llm-usage/.
 
 5. Other notes
 Algorithm summary: principal-variation (negamax) alpha-beta search with
-iterative deepening, aspiration windows, a transposition table and late-move
-reduction (later quiet moves are first searched one ply shallower); tactical
+iterative deepening, aspiration windows and a transposition table; tactical
 quiescence on fours and forced defences (with a bounded per-move table of
 quiescence results); a continuous-four (VCF) win search
 checked by a forcing-move verifier; forced-move handling (block a five, or
