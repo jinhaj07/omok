@@ -7,6 +7,7 @@ Version 2 adds cached ordering, PVS, tactical quiescence and completed-iteration
 selection, with loss-position regression checks and measured match validation.
 The bounded quiescence table (qtt) comes from a Codex (OpenAI) candidate made
 by Jinha Jang; Claude Code merged it as a switch and A/B tested it.
+Claude Code added late-move reduction (lmr) and A/B tested it the same way.
 """
 import random
 import time
@@ -1499,6 +1500,12 @@ class SmartPlayerJRM(PlayerJRM):
         # opponents), 0.959 vs 0.958 (independent games).
         self.params.update({'bfirst': 3, 'bdr': 1, 'bdc': 1, 'bmix': 0.5})
         self.params.update({'vcfall': 1})
+        # Late-move reduction (A/B cycles 30-31, random openings, pool of 10,
+        # 0.9-1.1 min): from the 6th move on, quiet moves (no four or capture)
+        # at depth >= 2 are scouted one ply shallower first. lmrk 5, lmrd 2
+        # won 1678/2266 vs 1608/2266 without it (+3.1%, z 2.3, same sign in
+        # both cycles); stronger reduction (lmrk 3) was worse.
+        self.params.update({'lmr': 1, 'lmrk': 5, 'lmrd': 2, 'lmrm': 5})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
