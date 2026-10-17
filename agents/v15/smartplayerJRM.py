@@ -1476,6 +1476,7 @@ class SmartPlayerJRM(PlayerJRM):
         # line too: simulated 8-game pass rate 0.908 vs 0.860 (deterministic
         # opponents), 0.959 vs 0.958 (independent games).
         self.params.update({'bfirst': 3, 'bdr': 1, 'bdc': 1, 'bmix': 0.5})
+        self.params.update({'vcfall': 1})
         self.engine = _FastEngine(self.params)
         self.moves_played = 0
         self.last_search = {}
@@ -1627,9 +1628,12 @@ class SmartPlayerJRM(PlayerJRM):
                     if choices:
                         best = choices[0]
                     hint = None
-                    # Four-scouting only when a three/four exists; selective
-                    # VCT scouting is omitted from every-turn preprocessing.
-                    if not threatened and e.T[me] and hard > 0.15:
+                    # Four-scouting when a three/four exists; selective VCT
+                    # scouting is omitted from every-turn preprocessing.
+                    # vcfall = also scout without an open three: a closed
+                    # three can start a continuous-four win too (found in a
+                    # lost game where the search ran out of time at depth 1).
+                    if not threatened and (e.T[me] or self.params.get('vcfall')) and hard > 0.15:
                         scout = _Searcher(e)
                         scout.deadline = min(deadline, started + min(0.16, hard * 0.08))
                         try:
