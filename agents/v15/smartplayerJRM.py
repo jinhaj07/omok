@@ -1090,6 +1090,13 @@ class _FastSearcher(_Searcher):
         self.qleft = 8
         self.noise = None
         self.text = engine.p.get('text', 0)
+        # lmr = late-move reduction (0 = off): from the lmrk-th move on, quiet
+        # moves at depth >= lmrd are scouted one ply shallower first.
+        self.lmr = engine.p.get('lmr', 0)
+        self.lmr_from = engine.p.get('lmrk', 3)
+        self.lmr_depth = engine.p.get('lmrd', 3)
+        # lmrm = feature flags that exempt a move (1 four, 2 three, 4 capture).
+        self.lmr_mask = engine.p.get('lmrm', 7)
         self.use_partial = engine.p.get('partial', 0)
         self.partial = None
         self.partial_used = None
@@ -1102,13 +1109,18 @@ class _FastSearcher(_Searcher):
         if not self.qtt_limit:
             self.quiet = self._quiet_uncached
 
-    def ordered(self, me, ply, tt_move=None, width=None):
+    def ordered(self, me, ply, tt_move=None, width=None, quiet=None):
         features = self.e.features(me)
         killers = self.killers.get(ply, ())
         history = self.history[me]
         ranked = sorted(features, key=lambda item:
                         (item[1] == tt_move, item[1] in killers,
                          item[0] + min(1200, history[item[1]])), reverse=True)
+        if quiet is not None:
+            # Moves without four/three/capture flags, for late-move reduction.
+            mask = self.lmr_mask
+            quiet.update(p for _, p, flags in ranked
+                         if not flags & mask and p != tt_move and p not in killers)
         if width is None:
             return [p for _, p, _ in ranked]
         selected = [p for _, p, flags in ranked[:width]]
@@ -1217,6 +1229,7 @@ class _FastSearcher(_Searcher):
             if d >= depth:
                 if flag == 0 or flag == 1 and val >= beta or flag == 2 and val <= alpha:
                     return val
+        quiet = None
         if threatened:
             moves = e.defences(me)
             if not moves:
@@ -1225,7 +1238,9 @@ class _FastSearcher(_Searcher):
                 moves.remove(tt_move)
                 moves.insert(0, tt_move)
         else:
-            moves = self.ordered(me, ply, tt_move, e.p['width'])
+            if self.lmr and depth >= self.lmr_depth:
+                quiet = set()
+            moves = self.ordered(me, ply, tt_move, e.p['width'], quiet)
         if not moves:
             return 0
         alpha0 = alpha
@@ -1240,7 +1255,14 @@ class _FastSearcher(_Searcher):
                     else:
                         # Values are floats. A one-point scout interval remains
                         # valid; any value above alpha is fully re-searched.
-                        value = -self.negamax(depth - 1, -alpha - 1.0, -alpha, enemy, ply + 1, ext)
+                        # lmr: a late quiet move is first scouted one ply
+                        # shallower and re-scouted at full depth if it beats alpha.
+                        reduced = (quiet is not None and index >= self.lmr_from and p in quiet
+                                   and not e.strict_wins(me))
+                        if reduced:
+                            value = -self.negamax(depth - 2, -alpha - 1.0, -alpha, enemy, ply + 1, ext)
+                        if not reduced or value > alpha:
+                            value = -self.negamax(depth - 1, -alpha - 1.0, -alpha, enemy, ply + 1, ext)
                         if alpha < value < beta:
                             value = -self.negamax(depth - 1, -beta, -alpha, enemy, ply + 1, ext)
             finally:
