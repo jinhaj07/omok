@@ -16,6 +16,7 @@ import argparse
 import glob
 import json
 import math
+import random
 import multiprocessing as mp
 import os
 import sys
@@ -47,6 +48,19 @@ def jobs(cfg):
     return out
 
 
+def opening(cfg, index):
+    """Optional "openings": [n, ...] starts every game from n random stones
+    near the centre (n cycling over the list). All colours and variants of
+    one (rep, clock, opponent) group share the opening, so comparisons stay
+    paired while each group gets a fresh position."""
+    sizes = cfg.get("openings")
+    if not sizes:
+        return []
+    group = index // (len(cfg.get("colours", (True, False))) * len(cfg["variants"]))
+    rng = random.Random(cfg.get("opening_seed", 1) * 1000003 + group)
+    return arena.random_opening(rng, sizes[group % len(sizes)])
+
+
 def _play(job):
     return arena.play_game(job)
 
@@ -54,12 +68,13 @@ def _play(job):
 def run(args):
     cfg = load(args.config)
     shard, n = (int(x) for x in args.shard.split("/"))
-    mine = [j for i, j in enumerate(jobs(cfg)) if i % n == shard]
+    mine = [(i, j) for i, j in enumerate(jobs(cfg)) if i % n == shard]
     games = []
-    for i, (name, opp, clock, black) in enumerate(mine):
+    for k, (i, (name, opp, clock, black)) in enumerate(mine):
         spec = cfg["variants"][name]
         b, w = (spec, opp) if black else (opp, spec)
-        games.append((b, w, clock, [], None, i))
+        games.append((b, w, clock, opening(cfg, i), None, k))
+    mine = [j for _, j in mine]
     with mp.Pool(args.jobs) as pool:
         results = pool.map(_play, games)
     digits = []
