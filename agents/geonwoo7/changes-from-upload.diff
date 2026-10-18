@@ -1,0 +1,41 @@
+--- uploaded/smartplayerJRM.py
++++ Geonwoo7/smartplayerJRM.py
+@@ -1,4 +1,4 @@
+-"""Hybrid v2 Omok++ agent (Geonwoo) with JangJinha additions (v15). Standard library only.
++"""Omok_JRM_Geonwoo7, based on the uploaded JRM v15. Standard library only.
+ 
+ AI disclosure: ChatGPT adapted the uploaded JangJinha v11 engine/search and
+ Geonwoo2/Minjun v3 safety and proof ideas. The JangJinha source credits Claude
+@@ -1427,7 +1427,9 @@
+ 
+ 
+ class SmartPlayerJRM(PlayerJRM):
+-    """Hybrid v2. Public interface and remaining-game-clock units unchanged."""
++    """Geonwoo7. Public interface and remaining-game-clock units unchanged."""
++
++    VERSION = 'Omok_JRM_Geonwoo7'
+ 
+     def __init__(self, color):
+         super().__init__(color)
+@@ -1455,7 +1457,9 @@
+         # text = threat extensions per search path (see _FastSearcher.negamax).
+         self.params.update({'text': 0})
+         # partial = use a better move proved by an unfinished last iteration.
+-        self.params.update({'partial': 0})
++        # Geonwoo7: retain a completed better root candidate on a later timeout.
++        # The existing exact-score and completed-iteration guards still apply.
++        self.params.update({'partial': 1})
+         self.params.update({'emin': 0})
+         # qdepth = quiescence depth (8); qtt = quiescence table size (0 = off).
+         # A/B cycles 20-21: qtt 32,768 won 1260/1500 vs 1211/1500 without it
+@@ -1469,7 +1473,9 @@
+         # a deterministic opponent the four white games repeat one line.
+         # Searched reply or a random knight's move half the time: simulated
+         # 8-game pass rate 0.899 (worst opponent 0.71) vs 0.785 (0.28).
+-        self.params.update({'first': 3, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
++        # Geonwoo7: use the searched first reply rather than a random override.
++        # The separate low-clock knight shortcut above remains available.
++        self.params.update({'first': 0, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
+         # bfirst: A/B cycle 26 (black only, empty board): first stone at the
+         # centre 267/280, at the four diagonal neighbours 1086/1120 (0.970).
+         # Centre or (half the time) a random diagonal neighbour varies black's

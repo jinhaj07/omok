@@ -1,0 +1,34 @@
+{
+ "variants": {
+  "base": "agents/v15/smartplayerJRM.py",
+  "g7": "agents/geonwoo7/smartplayerJRM.py"
+ },
+ "pool": [
+  "omok-agent/smartplayerJangJinha.py",
+  "agents/geonwoo3/smartplayerJRM.py",
+  "agents/geonwoo2/smartplayerJRM.py",
+  "agents/minjun3/smartplayerJRM.py",
+  "agents/geonwoo4_hybrid2/smartplayerJRM.py",
+  "agents/codexC/smartplayerJRM.py",
+  "agents/jinha_v10/smartplayerJangJinha.py",
+  "agents/v13/smartplayerJRM.py",
+  "agents/jinha_v3/smartplayerJinhaJang.py",
+  "agents/geonwoo5/smartplayerJRM.py",
+  "agents/holdout/geonwoo4orig/smartplayerJRM.py",
+  "agents/holdout/optg3/smartplayerJRM.py",
+  "agents/holdout/g5cand/smartplayerJRM.py",
+  "agents/holdout/g5dev/smartplayerJRM.py",
+  "agents/holdout/g5prog/smartplayerJRM.py",
+  "agents/holdout/v15old/smartplayerJRM.py",
+  "agents/holdout/v14/smartplayerJRM.py",
+  "agents/holdout/v11/smartplayerJangJinha.py",
+  "agents/g3abl/smartplayerJRM.py",
+  "agents/merge13/smartplayerJRM.py"
+ ],
+ "clocks": [
+  0.92,
+  1.12,
+  9
+ ],
+ "reps": 7
+}
