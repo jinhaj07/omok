@@ -95,6 +95,8 @@ ROOT_WIDTH = 22
 WIDTH = (22, 14, 10, 8, 7, 6)
 VCF_DEPTH = 12
 VCF_NODES = 6000
+CVCF_CAPS = 2              # cvcf: capture-fours allowed in one VCF line
+CVCF_DEPTHS = (2, 4, 6, 8) # cvcf: depths of the second pass before VCF_DEPTH
 
 # feature switches (used for testing the value of each part)
 USE_THREE_RULE = True
@@ -208,6 +210,26 @@ _rng = random.Random(20261017)
 ZOB = tuple(tuple(_rng.getrandbits(64) for _ in range(NCELL))
             for _ in range(2))
 ZSIDE = (0, _rng.getrandbits(64))
+ZX = _rng.getrandbits(64)          # cvcf: own memo keys for the second pass
+
+
+def _symmetries():
+    """The 8 rotations and reflections of the board as cell permutations."""
+    n = SIZE - 1
+    out = []
+    for f in ((lambda r, c: (r, c)), (lambda r, c: (c, n - r)),
+              (lambda r, c: (n - r, n - c)), (lambda r, c: (n - c, r)),
+              (lambda r, c: (r, n - c)), (lambda r, c: (n - r, c)),
+              (lambda r, c: (c, r)), (lambda r, c: (n - c, n - r))):
+        perm = []
+        for i in range(NCELL):
+            r, c = f(i // SIZE, i % SIZE)
+            perm.append(r * SIZE + c)
+        out.append(tuple(perm))
+    return tuple(out)
+
+
+SYMP = _symmetries()
 
 _CACHE = {}
 
@@ -566,8 +588,19 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
         self.last_info = None
         # Switches (defaults = v5): bmix = probability that black's first
         # stone goes to a random diagonal neighbour of the centre instead of
-        # the centre; tmul = scale on the per-move time budget and its cap.
-        self.params = {'bmix': 0.0, 'tmul': 1.0}
+        # the centre; tmul = scale on the per-move time budget and its cap;
+        # trx = extra moves outside the three-rule set searched at ply 0-1;
+        # cvcf = node cap of a second VCF pass that also tries captures
+        # which leave a five-cell; vsafe = root moves the VCF-safety pass
+        # checks, which then also runs in lost and forced positions;
+        # bvar = score margin of a random pick among the 3 best distinct
+        # 2nd stones as black.
+        self.params = {'bmix': 0.0, 'tmul': 1.0, 'trx': 0, 'cvcf': 0,
+                       'vsafe': 0, 'bvar': 0}
+        self._trx = 0
+        self._cvcf = 0
+        self._vx = 0
+        self._vcapn = 0
 
     # ------------------------------------------------------------ interface
     def take_turn(self, board, time):
@@ -592,7 +625,11 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
         if rem < 5.0:
             budget = rem / 30.0
         if stones < 4:
-            budget = min(budget, 0.3)
+            # bvar needs exact scores for black's 2nd stone: more time
+            cap = 0.3
+            if self.params.get('bvar', 0) and self.color == 0 and stones == 2:
+                cap = 0.8
+            budget = min(budget, cap)
         budget = max(budget, 0.003)
         # absolute limit for everything (search + VCF checks)
         hard = min(budget * 1.5 + 0.1, rem * 0.25)
@@ -601,6 +638,8 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
     def _think(self, flat, time_ms, t0):
         c = self.color
         o = 1 - c
+        self._trx = int(self.params.get('trx', 0))
+        self._cvcf = int(self.params.get('cvcf', 0))
         st = _BoardJinhaJang(flat)
         if st.stones == 0:
             # A deterministic black replays one line against a deterministic
@@ -670,6 +709,10 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
                 and OPENING_SIDE in (c, 2)
                 and not st.wins[c] and not st.wins[o]):
             margin = OPENING_MARGIN
+        bvar = 0
+        if (self.params.get('bvar', 0) and c == 0 and st.stones == 2
+                and not st.wins[c] and not st.wins[o]):
+            bvar = margin = self.params['bvar']
         scores = None
         while depth <= MAX_DEPTH:
             height = len(st.stack)
@@ -693,14 +736,35 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
         # opening variety: random pick among the near-best moves
         if margin and scores and abs(val) < WIN - 1000:
             pool = sorted(m for m, v in scores.items() if v >= val - margin)
+            if bvar:
+                pool = self._distinct(st, pool, scores)
             if len(pool) > 1:
                 best = _RAND.choice(pool)
                 self.last_info = ('random', depth, len(pool))
 
-        # 5) do not hand the opponent a forced win by fours
-        if USE_VCF and not st.wins[o] and val > -(WIN - 1000):
+        # 5) do not hand the opponent a forced win by fours (with vsafe also
+        # after a proven loss and among several five-threat defences)
+        vs = self.params.get('vsafe', 0)
+        if USE_VCF and (vs or (not st.wins[o] and val > -(WIN - 1000))):
             best = self._vcf_safe(st, c, best, order)
         return best
+
+    def _distinct(self, st, pool, scores):
+        """Best move of each of the 3 best classes of pool moves that are not
+        mirror images of each other in the current position."""
+        b = st.b
+        stones = [i for i in range(NCELL) if b[i] != EMPTY]
+        syms = [p for p in SYMP if all(b[p[i]] == b[i] for i in stones)]
+        seen = set()
+        out = []
+        for m in sorted(pool, key=lambda x: -scores[x]):
+            k = min(p[m] for p in syms)
+            if k not in seen:
+                seen.add(k)
+                out.append(m)
+                if len(out) == 3:
+                    break
+        return out
 
     def _book_reply(self, st):
         first = [i for i in range(NCELL) if st.b[i] == 0]
@@ -779,7 +843,11 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
         tt_move = None
         if ent is not None:
             e_depth, e_flag, e_val, tt_move = ent
-            if e_depth >= depth:
+            # trx: no cutoff at three-rule nodes at ply 1, where a stored
+            # result may come from the strict three-rule of an older search
+            if e_depth >= depth and not (
+                    self._trx and ply == 1 and not forced
+                    and st.ofours[o] and not st.ofours[c]):
                 if e_flag == 0:
                     return e_val
                 if e_flag == 1 and e_val >= beta:
@@ -855,6 +923,18 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
                 scored.append((s, m))
             scored.sort(reverse=True)
             moves = [m for _, m in scored]
+            if self._trx and ply <= 1:
+                # trx: also the best moves outside the three-rule set
+                extra = []
+                for idx in st.cand:
+                    if b[idx] != EMPTY or idx in cand:
+                        continue
+                    s = 0
+                    for lid, off, _ in CELL_LINES[idx]:
+                        s += linfo[lid][gi][off]
+                    extra.append((s, idx))
+                extra.sort(reverse=True)
+                moves += [m for _, m in extra[:self._trx]]
         else:
             scored = []
             for idx in st.cand:
@@ -899,16 +979,38 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
     # ------------------------------------------------------------------ VCF
     def _try_vcf(self, st, c, depth, limit):
         """Winning first move by continuous fours for c, or -1."""
-        if not st.fours[c]:
-            return -1
+        m = -1
+        if st.fours[c]:
+            self._vnodes = 0
+            self._vlimit = limit
+            height = len(st.stack)
+            try:
+                m = self._vcf(st, c, depth)
+            except (_VcfAbortJinhaJang, _TimeUpJinhaJang):
+                st.unwind(height)
+                m = -1
+        if m >= 0 or not self._cvcf or not (st.fours[c] or st.caps[c]):
+            return m
+        # cvcf: second pass that also tries captures leaving c a five-cell
+        # (at most CVCF_CAPS per line), shallow depths first, own node cap
         self._vnodes = 0
-        self._vlimit = limit
+        self._vlimit = self._cvcf
+        self._vx = ZX
+        self._vcapn = 0
         height = len(st.stack)
         try:
-            return self._vcf(st, c, depth)
+            for d in CVCF_DEPTHS + (depth,):
+                if d > depth:
+                    break
+                m = self._vcf(st, c, d)
+                if m >= 0:
+                    return m
+            return -1
         except (_VcfAbortJinhaJang, _TimeUpJinhaJang):
             st.unwind(height)
             return -1
+        finally:
+            self._vx = 0
 
     def _vcf(self, st, c, depth):
         self._vnodes += 1
@@ -919,9 +1021,10 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
         o = 1 - c
         if st.wins[c]:
             return min(st.win_cells(c))
-        if st.wins[o] or depth <= 0 or not st.fours[c]:
+        xcap = self._vx and st.caps[c] and self._vcapn < CVCF_CAPS
+        if st.wins[o] or depth <= 0 or not (st.fours[c] or xcap):
             return -1
-        key = st.h ^ ZSIDE[c]
+        key = st.h ^ ZSIDE[c] ^ self._vx
         ent = self._vtt.get(key)
         if ent is not None:
             if ent[0]:
@@ -930,11 +1033,17 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
                 return -1
         opens = _cells(st.ofours[c])
         rest = _cells(st.fours[c]) - opens
-        for m in list(opens) + sorted(rest):
+        order = list(opens)
+        if xcap:
+            order += sorted(_cells(st.caps[c]) - opens - rest)
+        order += sorted(rest)
+        for m in order:
             cap, status = st.make(m, c)
             if status or st.wins[o] or not st.wins[c]:
                 st.unmake(m, c, cap)
                 continue
+            if cap:
+                self._vcapn += 1
             ok = True
             for d in self._defenses(st, o):
                 cap2, status2 = st.make(d, o)
@@ -945,6 +1054,8 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
                 st.unmake(d, o, cap2)
                 if not ok:
                     break
+            if cap:
+                self._vcapn -= 1
             st.unmake(m, c, cap)
             if ok:
                 self._vtt[key] = (True, m)
@@ -954,9 +1065,14 @@ class SmartPlayerJinhaJang(PlayerJinhaJang):
 
     def _vcf_safe(self, st, c, best, order):
         o = 1 - c
+        vs = self.params.get('vsafe', 0)
         tried = 0
         for m in [best] + [x for x in order if x != best]:
-            if tried >= 6:
+            if tried >= (vs or 6):
+                break
+            # vsafe: past the hard limit every VCF check aborts and would
+            # pass an unchecked move as safe
+            if vs and tried and perf_counter() > self._hard:
                 break
             tried += 1
             cap, status = st.make(m, c)
