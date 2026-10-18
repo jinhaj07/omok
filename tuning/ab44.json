@@ -1,9 +1,9 @@
 {
  "variants": {
+  "v18": "agents/v18/smartplayerJRM.py",
+  "v18mix": "agents/v18/smartplayerJRM.py@first=3,fmix=0.5",
   "jv5": "agents/jinha_v5x/smartplayerJinhaJang.py",
-  "bmix": "agents/jinha_v5x/smartplayerJinhaJang.py@bmix=0.5",
-  "t15": "agents/jinha_v5x/smartplayerJinhaJang.py@tmul=1.5",
-  "t20": "agents/jinha_v5x/smartplayerJinhaJang.py@tmul=2.0"
+  "jv5x": "agents/jinha_v5x/smartplayerJinhaJang.py@bmix=0.5,tmul=1.5"
  },
  "pool": [
   "omok-agent/smartplayerJangJinha.py",
@@ -25,12 +25,13 @@
   "agents/holdout/v14/smartplayerJRM.py",
   "agents/holdout/v11/smartplayerJangJinha.py",
   "agents/g3abl/smartplayerJRM.py",
-  "agents/merge13/smartplayerJRM.py"
+  "agents/merge13/smartplayerJRM.py",
+  "agents/jinha_v5/smartplayerJinhaJang.py"
  ],
  "clocks": [
-  0.93,
-  1.07,
-  8
+  0.94,
+  1.06,
+  5
  ],
- "reps": 4
+ "reps": 6
 }
