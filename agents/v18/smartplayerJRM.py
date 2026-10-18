@@ -1462,6 +1462,8 @@ class SmartPlayerJRM(PlayerJRM):
         # vs 3169/4135 (0.766), z 2.57; unseen opponents 0.789 vs 0.734.
         # Same engine head to head at 1 minute: 49 wins in 60 games.
         self.params.update({'partial': 1})
+        # softr = share of the move budget after which no new iteration starts.
+        self.params.update({'softr': 0.67})
         self.params.update({'emin': 0})
         # qdepth = quiescence depth (8); qtt = quiescence table size (0 = off).
         # A/B cycles 20-21: qtt 32,768 won 1260/1500 vs 1211/1500 without it
@@ -1508,7 +1510,7 @@ class SmartPlayerJRM(PlayerJRM):
             hard = min(hard, cap2)
         elif stones <= 5:
             hard = min(hard, cap5)
-        return max(0.001, hard * 0.67), max(0.001, hard)
+        return max(0.001, hard * self.params.get('softr', 0.67)), max(0.001, hard)
 
     def take_turn(self, board, time):
         """Course interface. An unexpected error never forfeits the game: the
