@@ -1,0 +1,26 @@
+Omok++ SmartPlayerJinhaJang v5
+==============================
+
+omok-agent/  에이전트 코드 (playerJinhaJang.py, smartplayerJinhaJang.py)
+play/        팀(JRM) 게임 코드에 v5를 플레이어 3번으로 연결한 실행용 복사본
+
+실행 방법 (play 폴더 안에서, 표준 라이브러리만 사용):
+  python3 omok.py 3 2 1     v5(흑) vs SimplePlayer(백), 1분 제한
+  python3 omok.py 2 3 1     SimplePlayer(흑) vs v5(백), 1분 제한
+  python3 omok.py 3 1 1     v5(흑) vs RandomPlayer(백)
+  python3 omok.py 0 3 -1    내가 흑으로 v5와 대국, 시간 제한 없음
+                            (착수 입력 형식: 행,열  예: 9,9)
+
+주의: 최종 제출용 패키지가 아님.
+  - 제출 형식(omok-agent-[팀이름].zip)에 필요한 README.txt
+    (팀원 / 실행법 / LLM 사용 신고 / 참고자료)와 llm-usage/ 폴더는 아직 없음.
+  - 클래스/파일 이름의 팀 이름 접미사(JinhaJang)는 팀 이름 확정 후 변경 가능.
+
+
+v4 변경점: 백일 때만 첫 수를 오프닝북(두 칸 직선 / 바로 옆 대각선)에서 고르고,
+둘째 수까지 최선과 거의 같은 수들 중 무작위로 골라서 매 판 다른 경기가 나옴.
+흑은 그대로 결정적.
+
+v5 변경점: 알고리즘은 v4와 같고, 평가/수 정렬 가중치 15개만 SPSA 자기대국
+자동 튜닝(18,496판)으로 바꿈. 파일 위쪽 상수에 v4 값을 주석으로 남겨둠.
+v4 상대 검증: 192판 124승 68패, 새 오프닝 60초 48판 32승 16패.
