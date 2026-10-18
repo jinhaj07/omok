@@ -1,0 +1,1126 @@
+"""
+SmartPlayerJRM -- Omok++ game agent of team JRM (CAS1102 Project 1, Part 2)
+
+Engine: Jinha Jang's agent version 5 (SmartPlayerJinhaJang), renamed for the
+team, plus the switches of "v5x" below, set to the values chosen by testing.
+
+[LLM usage] Versions 1-5 were written with the help of an LLM (Claude, used
+through the Hermes Agent app). The v5x switches were designed and tested with
+Claude Code (Anthropic): a multi-agent analysis of Jinha v5's and our Hybrid v2
+agent's lost games, then A/B cycles 44-45 and grading simulations.
+See README.txt / llm-usage/.
+
+How it plays (version 5)
+  * The board is copied into a flat list of 361 cells (-1 / 0 / 1).
+  * Every line of the board (rows, columns and the diagonals that are at
+    least 5 cells long) is scored by sliding a 5-cell window over it.
+    A window is "alive" for a color when it has no opponent stone and the
+    cells right outside it are not that color, i.e. it can still become
+    EXACTLY five (6+ in a row does not win).  A window holding k stones
+    is worth WINDOW_VALUE[k].
+  * Line results are cached by the text of the line, and after a move
+    (or a capture) only the lines through the changed cells are rescored.
+  * Negamax alpha-beta search + iterative deepening inside a per-move time
+    budget (the whole game only has 1 minute).
+  * Forcing moves: if the opponent can make five on the next turn, only the
+    moves that remove every such threat (blocking OR capturing) are
+    searched, and these forced replies do not use up search depth.
+    (v1 also gave free depth to the move that MAKES a four; that blew up
+    the tree in busy positions, so v2 removed it: search depth 3 -> ~6.)
+  v2 additions
+  * Each line also reports "four cells" (a stone there makes a four) and
+    "open-four cells" (a stone there makes two winning cells at once,
+    i.e. the line holds a live three).
+  * Evaluation knows that a live three for the side to move is nearly a
+    win, and that two live threes for the opponent are nearly a loss.
+  * If the opponent has a live three, only answers to it (blocks, own
+    fours, captures) are searched.
+  * VCF search (victory by continuous fours, captures counted as defenses)
+    to find deep forced wins, and to refuse moves that give the opponent one.
+  v3 additions
+  * Lines are keyed by integers (2 bits per cell) instead of strings, and the
+    candidate set is only touched when a neighbour count goes 0 <-> 1
+    (identical search, ~15% faster).
+  * Evaluation bonus when the side to move can capture right now.
+  * Every move made during search goes on a stack, so a search stopped by
+    the clock / node limit is rewound exactly (v2 could keep searching on
+    a board with leftover stones after an aborted VCF).
+  * Hard time limit for every part of a move, and a no-search emergency
+    mode when less than 1 second is left.
+  v4 additions (opening, only when playing white)
+  * Graded games all start from an empty board, and two deterministic
+    agents replay the same game, so a match against a strong bot tends to
+    end 4 - 4 (each side wins as black).  "Beating" an agent needs 5 of 8.
+  * As white, the first reply comes from a small book (two-away straight
+    or adjacent diagonal, chosen by an opening study; mirror images picked
+    at random), and the next opening moves are picked at random among the
+    moves scoring within OPENING_MARGIN of the best.  The 4 white games are
+    then different games, so a white win becomes possible.
+  * Black stays deterministic (randomizing black lost too much strength).
+  v5 change (weights only, same algorithm)
+  * The evaluation / move-ordering weights below were tuned automatically
+    by SPSA self-play (18,496 games at 15 s per side: each round plays a
+    slightly-raised against a slightly-lowered copy of all weights and moves
+    the weights toward the winner).  Checked against v4 afterwards:
+    124 wins / 68 losses in 192 games (60 s games: 46 - 18).
+    Main changes: blocking the opponent's 2- and 3-stone windows ranks
+    higher (B2 x2.1, B3 x1.6), own 2/3 windows count a bit less, and the
+    side-to-move bonus is larger (own score // 4.355 instead of // 8).
+  v5x additions (switches in self.params; all 0 / 1.0 plays exactly like v5)
+  * bmix 0.5: as black, half of the games start on a random diagonal
+    neighbour of the centre, so a deterministic white cannot win all four
+    black games by refuting one line.
+  * tmul 1.5: 1.5x the per-move time budget (v5 used at most ~36 of 60 s).
+  * trx 4: where the opponent's live three restricts the move list (blocks,
+    own fours, captures), the 4 best other moves are searched too at ply 0
+    and 1, and at ply 1 a stored result from the restricted search does not
+    cut the node off.  Fixes black lines that v5 lost to false mate scores.
+  * cvcf 300: when no VCF is found, a second VCF pass (300 nodes) also tries
+    captures that open a five-cell (at most 2 per line); used for our own
+    attack and for the opponent check below.
+  * vsafe 12: the "no VCF for the opponent after my move" check looks at up
+    to 12 root moves, and also runs after the search proved a loss and among
+    several defences of a five-threat; it stops at the hard time limit.
+  * bvar (off): random pick among the 3 best distinct 2nd stones as black;
+    tested worse than bmix.
+  Tests (empty board, 21 opponents, 0.94-1.06 min): 0.749 win rate vs 0.690
+  for v5 (cycles 44-45); grading simulation at exactly 1 minute (4 + 4 games
+  against each of 21 agents): 20 passed, black 81/84, white 54/84.
+"""
+from time import perf_counter
+import random
+
+from playerJRM import PlayerJRM
+
+SIZE = 19
+EMPTY = -1
+NCELL = SIZE * SIZE
+CENTER = (SIZE // 2) * SIZE + SIZE // 2
+CHARS = ('.', '0', '1')            # index = cell value + 1
+
+AXES = ((0, 1), (1, 0), (1, 1), (1, -1))
+DIRS = AXES + tuple((-dr, -dc) for dr, dc in AXES)
+
+# evaluation / move-ordering weights
+# v5: weights tuned by SPSA self-play (v4 values in the comments)
+WINDOW_VALUE = (0, 1.708, 13.61, 92.71, 1433, 2000000)   # v4: 2, 16, 130, 1300
+BLOCK_VALUE = (0, 1, 25.52, 179.3, 400000)          # v4: 12, 110
+CAPTURE_GAIN = 327.3           # v4: 350
+SAVE_GAIN = 184.3              # v4: 250
+VULNERABLE = 29.24             # v4: 45
+FOUR_BONUS = 2860              # v4: 3000
+OPEN_FOUR_BONUS = 81940        # v4: 60000
+THREAT_WIN = 247800            # v4: 300000
+DOUBLE_THREE = 180200          # v4: 150000
+
+WIN = 100000000
+INF = 1 << 60
+MAX_PLY = 24
+MAX_DEPTH = 20
+ROOT_WIDTH = 22
+WIDTH = (22, 14, 10, 8, 7, 6)
+VCF_DEPTH = 12
+VCF_NODES = 6000
+CVCF_CAPS = 2              # cvcf: capture-fours allowed in one VCF line
+CVCF_DEPTHS = (2, 4, 6, 8) # cvcf: depths of the second pass before VCF_DEPTH
+
+# feature switches (used for testing the value of each part)
+USE_THREE_RULE = True
+USE_THREAT_EVAL = True
+USE_VCF = True
+
+# time management (whole game = 1 minute)
+BUDGET_DIV = 18.0      # use remaining / BUDGET_DIV per move ...
+BUDGET_CAP = 3.0       # ... but never more than this (seconds)
+ITER_STOP = 0.45       # do not start a new depth after this share of budget
+PANIC_MS = 1000        # below this much time left: no search at all
+
+CAP_TEMPO = 169.7        # eval bonus: side to move can capture right now (v4: 200)
+TEMPO_DIV = 4.355        # side to move gets own_score // TEMPO_DIV extra (v4: 8)
+
+# opening variety: while few stones are on the board, pick randomly among
+# moves whose search score is within OPENING_MARGIN of the best one
+OPENING_STONES = 4
+OPENING_MARGIN = 30
+OPENING_SIDE = 1       # 0 = only as black, 1 = only as white, 2 = both
+
+# white's first reply: one of these offset types from black's first stone
+# (chosen by an opening study; empty tuple = let the search decide).
+# Mirror images of the same type are equal in value, so the pick among
+# them is random for variety.
+WHITE_BOOK = ('orth2', 'diag1')
+BOOK_OFFSETS = {
+    'diag1': ((-1, -1), (-1, 1), (1, -1), (1, 1)),
+    'orth1': ((-1, 0), (1, 0), (0, -1), (0, 1)),
+    'diag2': ((-2, -2), (-2, 2), (2, -2), (2, 2)),
+    'orth2': ((-2, 0), (2, 0), (0, -2), (0, 2)),
+    'knight': ((-2, -1), (-2, 1), (2, -1), (2, 1),
+               (-1, -2), (-1, 2), (1, -2), (1, 2)),
+}
+_RAND = random.Random()
+
+
+def _build_tables():
+    lines = []
+    for r in range(SIZE):
+        lines.append(tuple(r * SIZE + c for c in range(SIZE)))
+    for c in range(SIZE):
+        lines.append(tuple(r * SIZE + c for r in range(SIZE)))
+    starts = [(0, c) for c in range(SIZE)] + [(r, 0) for r in range(1, SIZE)]
+    for r0, c0 in starts:
+        cells = []
+        r, c = r0, c0
+        while r < SIZE and c < SIZE:
+            cells.append(r * SIZE + c)
+            r += 1
+            c += 1
+        if len(cells) >= 5:
+            lines.append(tuple(cells))
+    starts = ([(0, c) for c in range(SIZE)]
+              + [(r, SIZE - 1) for r in range(1, SIZE)])
+    for r0, c0 in starts:
+        cells = []
+        r, c = r0, c0
+        while r < SIZE and c >= 0:
+            cells.append(r * SIZE + c)
+            r += 1
+            c -= 1
+        if len(cells) >= 5:
+            lines.append(tuple(cells))
+
+    cell_lines = [[] for _ in range(NCELL)]
+    for lid, cells in enumerate(lines):
+        for off, idx in enumerate(cells):
+            cell_lines[idx].append((lid, off, 1 << (2 * off)))
+
+    caps, rays, near = [], [], []
+    for idx in range(NCELL):
+        r, c = divmod(idx, SIZE)
+        t = []
+        for dr, dc in DIRS:
+            r3, c3 = r + 3 * dr, c + 3 * dc
+            if 0 <= r3 < SIZE and 0 <= c3 < SIZE:
+                t.append(((r + dr) * SIZE + c + dc,
+                          (r + 2 * dr) * SIZE + c + 2 * dc,
+                          r3 * SIZE + c3))
+        caps.append(tuple(t))
+
+        rr = []
+        for dr, dc in AXES:
+            both = []
+            for sign in (1, -1):
+                ray = []
+                for k in range(1, 7):
+                    r2, c2 = r + sign * k * dr, c + sign * k * dc
+                    if not (0 <= r2 < SIZE and 0 <= c2 < SIZE):
+                        break
+                    ray.append(r2 * SIZE + c2)
+                both.append(tuple(ray))
+            rr.append(tuple(both))
+        rays.append(tuple(rr))
+
+        nb = []
+        for dr in range(-2, 3):
+            for dc in range(-2, 3):
+                r2, c2 = r + dr, c + dc
+                if (dr or dc) and 0 <= r2 < SIZE and 0 <= c2 < SIZE:
+                    nb.append(r2 * SIZE + c2)
+        near.append(tuple(nb))
+    return (tuple(lines), tuple(tuple(x) for x in cell_lines),
+            tuple(caps), tuple(rays), tuple(near))
+
+
+LINES, CELL_LINES, CAPS, RAYS, NEAR = _build_tables()
+
+_rng = random.Random(20261017)
+ZOB = tuple(tuple(_rng.getrandbits(64) for _ in range(NCELL))
+            for _ in range(2))
+ZSIDE = (0, _rng.getrandbits(64))
+ZX = _rng.getrandbits(64)          # cvcf: own memo keys for the second pass
+
+
+def _symmetries():
+    """The 8 rotations and reflections of the board as cell permutations."""
+    n = SIZE - 1
+    out = []
+    for f in ((lambda r, c: (r, c)), (lambda r, c: (c, n - r)),
+              (lambda r, c: (n - r, n - c)), (lambda r, c: (n - c, r)),
+              (lambda r, c: (r, n - c)), (lambda r, c: (n - r, c)),
+              (lambda r, c: (c, r)), (lambda r, c: (n - c, n - r))):
+        perm = []
+        for i in range(NCELL):
+            r, c = f(i // SIZE, i % SIZE)
+            perm.append(r * SIZE + c)
+        out.append(tuple(perm))
+    return tuple(out)
+
+
+SYMP = _symmetries()
+
+_CACHE = {}
+
+
+def _line_key(values):
+    """Integer key of a line: 2 bits per cell (empty 1, black 2, white 3)
+    plus a sentinel bit on top, so lines of different length never clash."""
+    key = 1 << (2 * len(values))
+    for off, v in enumerate(values):
+        key |= (v + 2) << (2 * off)
+    return key
+
+
+def _line_info(key):
+    """Analyse one line given its integer key (see _line_key).
+
+    Returns a tuple, per color (0 / 1):
+      [0, 1]   window score
+      [2, 3]   wins   : offsets where that color makes exactly five
+      [4, 5]   caps   : offsets where that color captures a pair
+      [6, 7]   gain   : per-offset move-ordering bonus
+      [8, 9]   fours  : offsets where that color makes a four
+      [10, 11] ofours : offsets where that color makes an open four
+    """
+    n = (key.bit_length() - 1) // 2
+    s = ''.join('?.01'[(key >> (2 * off)) & 3] for off in range(n))
+    score = [0, 0]
+    wins = ([], [])
+    caps = ([], [])
+    fours = ([], [])
+    ofours = ([], [])
+    gain = ([0] * n, [0] * n)
+    for me in (0, 1):
+        ch = CHARS[me + 1]
+        oc = CHARS[2 - me]
+        g_me = gain[me]
+        g_op = gain[1 - me]
+        partner = {}
+        for i in range(n - 4):
+            w = s[i:i + 5]
+            if oc in w:
+                continue
+            if i > 0 and s[i - 1] == ch:
+                continue
+            if i + 5 < n and s[i + 5] == ch:
+                continue
+            k = w.count(ch)
+            if k == 5:
+                continue
+            score[me] += WINDOW_VALUE[k]
+            if k == 4:
+                wins[me].append(i + w.index('.'))
+            elif k == 3:
+                e1 = i + w.index('.')
+                e2 = i + w.rindex('.')
+                partner.setdefault(e1, set()).add(e2)
+                partner.setdefault(e2, set()).add(e1)
+            att = WINDOW_VALUE[k + 1] - WINDOW_VALUE[k]
+            blk = BLOCK_VALUE[k]
+            for j in range(i, i + 5):
+                if s[j] == '.':
+                    g_me[j] += att
+                    g_op[j] += blk
+        for j, ps in partner.items():
+            fours[me].append(j)
+            g_me[j] += FOUR_BONUS
+            if len(ps) >= 2:
+                ofours[me].append(j)
+                g_me[j] += OPEN_FOUR_BONUS
+        # pair captures along this line:  me opp opp .  /  . opp opp me
+        for i in range(n - 3):
+            if s[i + 1] == oc and s[i + 2] == oc:
+                a = s[i]
+                d = s[i + 3]
+                if a == ch and d == '.':
+                    j = i + 3
+                elif a == '.' and d == ch:
+                    j = i
+                else:
+                    continue
+                caps[me].append(j)
+                g_me[j] += CAPTURE_GAIN
+                g_op[j] += SAVE_GAIN
+                score[1 - me] -= VULNERABLE
+    info = (score[0], score[1], tuple(wins[0]), tuple(wins[1]),
+            tuple(caps[0]), tuple(caps[1]), tuple(gain[0]), tuple(gain[1]),
+            tuple(sorted(fours[0])), tuple(sorted(fours[1])),
+            tuple(sorted(ofours[0])), tuple(sorted(ofours[1])))
+    if len(_CACHE) > 60000:
+        _CACHE.clear()
+    _CACHE[key] = info
+    return info
+
+
+def _cells(table):
+    """Union of board cells stored as {line id: offsets}."""
+    out = set()
+    for lid, offs in table.items():
+        cells = LINES[lid]
+        for off in offs:
+            out.add(cells[off])
+    return out
+
+
+class _TimeUpJRM(Exception):
+    pass
+
+
+class _VcfAbortJRM(Exception):
+    pass
+
+
+class _BoardJRM:
+    """Search board with incremental line scores (internal helper)."""
+
+    def __init__(self, flat):
+        self.b = list(flat)
+        self.lkey = []
+        self.linfo = []
+        self.score = [0, 0]
+        self.wins = ({}, {})
+        self.caps = ({}, {})
+        self.fours = ({}, {})
+        self.ofours = ({}, {})
+        slots = ((2, self.wins[0]), (3, self.wins[1]), (4, self.caps[0]),
+                 (5, self.caps[1]), (8, self.fours[0]), (9, self.fours[1]),
+                 (10, self.ofours[0]), (11, self.ofours[1]))
+        for lid, cells in enumerate(LINES):
+            key = _line_key([self.b[i] for i in cells])
+            info = _CACHE.get(key)
+            if info is None:
+                info = _line_info(key)
+            self.lkey.append(key)
+            self.linfo.append(info)
+            self.score[0] += info[0]
+            self.score[1] += info[1]
+            for k, table in slots:
+                if info[k]:
+                    table[lid] = info[k]
+        self.stack = []          # (idx, color, captured) of moves made
+        self.near = [0] * NCELL
+        self.cand = set()
+        self.h = 0
+        self.stones = 0
+        for idx in range(NCELL):
+            v = self.b[idx]
+            if v != EMPTY:
+                self.stones += 1
+                self.h ^= ZOB[v][idx]
+                for j in NEAR[idx]:
+                    self.near[j] += 1
+        # cand = every cell with a stone within distance 2 (occupied cells
+        # included; they are skipped when moves are generated)
+        for idx in range(NCELL):
+            if self.near[idx]:
+                self.cand.add(idx)
+
+    def _lines(self, idx, delta):
+        lkey = self.lkey
+        linfo = self.linfo
+        sc = self.score
+        w0, w1 = self.wins
+        c0, c1 = self.caps
+        f0, f1 = self.fours
+        o0, o1 = self.ofours
+        for lid, off, mult in CELL_LINES[idx]:
+            key = lkey[lid] + delta * mult
+            lkey[lid] = key
+            info = _CACHE.get(key)
+            if info is None:
+                info = _line_info(key)
+            old = linfo[lid]
+            linfo[lid] = info
+            sc[0] += info[0] - old[0]
+            sc[1] += info[1] - old[1]
+            if info[2]:
+                w0[lid] = info[2]
+            elif old[2]:
+                del w0[lid]
+            if info[3]:
+                w1[lid] = info[3]
+            elif old[3]:
+                del w1[lid]
+            if info[4]:
+                c0[lid] = info[4]
+            elif old[4]:
+                del c0[lid]
+            if info[5]:
+                c1[lid] = info[5]
+            elif old[5]:
+                del c1[lid]
+            if info[8]:
+                f0[lid] = info[8]
+            elif old[8]:
+                del f0[lid]
+            if info[9]:
+                f1[lid] = info[9]
+            elif old[9]:
+                del f1[lid]
+            if info[10]:
+                o0[lid] = info[10]
+            elif old[10]:
+                del o0[lid]
+            if info[11]:
+                o1[lid] = info[11]
+            elif old[11]:
+                del o1[lid]
+
+    def _put(self, idx, v):
+        self.b[idx] = v
+        self._lines(idx, v + 1)
+        self.h ^= ZOB[v][idx]
+        self.stones += 1
+        near = self.near
+        cand = self.cand
+        for j in NEAR[idx]:
+            n = near[j] + 1
+            near[j] = n
+            if n == 1:
+                cand.add(j)
+
+    def _take(self, idx):
+        b = self.b
+        v = b[idx]
+        b[idx] = EMPTY
+        self._lines(idx, -1 - v)
+        self.h ^= ZOB[v][idx]
+        self.stones -= 1
+        near = self.near
+        cand = self.cand
+        for j in NEAR[idx]:
+            n = near[j] - 1
+            near[j] = n
+            if not n:
+                cand.discard(j)
+
+    def make(self, idx, c):
+        """Play c at idx (with captures).
+
+        Returns (captured cells, status) where status bit 1 = mover made
+        exactly five, bit 2 = opponent got exactly five because a capture
+        cut a longer line (3 = both -> draw).
+        """
+        o = 1 - c
+        self._put(idx, c)
+        b = self.b
+        captured = None
+        for i1, i2, i3 in CAPS[idx]:
+            if b[i1] == o and b[i2] == o and b[i3] == c:
+                if captured is None:
+                    captured = [i1, i2]
+                else:
+                    captured.append(i1)
+                    captured.append(i2)
+        status = 0
+        if captured:
+            for x in captured:
+                self._take(x)
+            for x in captured:
+                if self._five_next_to(x, o):
+                    status = 2
+                    break
+        if self._five_through(idx, c):
+            status |= 1
+        self.stack.append((idx, c, captured))
+        return captured, status
+
+    def unmake(self, idx, c, captured):
+        self.stack.pop()
+        if captured:
+            o = 1 - c
+            for x in captured:
+                self._put(x, o)
+        self._take(idx)
+
+    def unwind(self, height):
+        """Take back moves until the stack has `height` entries again
+        (used when a search is aborted by the clock or a node limit)."""
+        while len(self.stack) > height:
+            idx, c, captured = self.stack[-1]
+            self.unmake(idx, c, captured)
+
+    def _five_through(self, idx, c):
+        b = self.b
+        for fw, bw in RAYS[idx]:
+            n = 1
+            for j in fw:
+                if b[j] != c:
+                    break
+                n += 1
+            for j in bw:
+                if b[j] != c:
+                    break
+                n += 1
+            if n == 5:
+                return True
+        return False
+
+    def _five_next_to(self, x, o):
+        b = self.b
+        for ray_pair in RAYS[x]:
+            for ray in ray_pair:
+                n = 0
+                for j in ray:
+                    if b[j] != o:
+                        break
+                    n += 1
+                if n == 5:
+                    return True
+        return False
+
+    def win_cells(self, c):
+        return _cells(self.wins[c])
+
+    def capture_cells(self, c):
+        return _cells(self.caps[c])
+
+    def gain(self, idx, c):
+        gi = 6 + c
+        linfo = self.linfo
+        s = 0
+        for lid, off, _ in CELL_LINES[idx]:
+            s += linfo[lid][gi][off]
+        return s
+
+    def evaluate(self, c):
+        o = 1 - c
+        a = self.score[c]
+        v = a - self.score[o] + a // TEMPO_DIV
+        if CAP_TEMPO and self.caps[c]:
+            v += CAP_TEMPO
+        if not USE_THREAT_EVAL:
+            return v
+        if self.ofours[c]:
+            # live three and it is our move: open four next
+            v += THREAT_WIN if not self.fours[o] else THREAT_WIN // 2
+        elif len(self.ofours[o]) >= 2 and not self.fours[c]:
+            # two live threes against us and no forcing reply
+            v -= DOUBLE_THREE
+        return v
+
+
+class SmartPlayerJRM(PlayerJRM):
+    def __init__(self, color):
+        super().__init__(color)
+        self._tt = {}
+        self._vtt = {}
+        self._deadline = 0.0
+        self._hard = 0.0
+        self._nodes = 0
+        self._vnodes = 0
+        self._vlimit = 0
+        self._iter_best = None
+        self._root_scores = {}
+        self._killers = []
+        self.last_info = None
+        # Switches (0 / 1.0 = v5; see v5x above): bmix = probability that black's first
+        # stone goes to a random diagonal neighbour of the centre instead of
+        # the centre; tmul = scale on the per-move time budget and its cap;
+        # trx = extra moves outside the three-rule set searched at ply 0-1;
+        # cvcf = node cap of a second VCF pass that also tries captures
+        # which leave a five-cell; vsafe = root moves the VCF-safety pass
+        # checks, which then also runs in lost and forced positions;
+        # bvar = score margin of a random pick among the 3 best distinct
+        # 2nd stones as black.
+        self.params = {'bmix': 0.5, 'tmul': 1.5, 'trx': 4, 'cvcf': 300,
+                       'vsafe': 12, 'bvar': 0}
+        self._trx = 0
+        self._cvcf = 0
+        self._vx = 0
+        self._vcapn = 0
+
+    # ------------------------------------------------------------ interface
+    def take_turn(self, board, time):
+        t0 = perf_counter()
+        flat = [int(board[r][c]) for r in range(SIZE) for c in range(SIZE)]
+        try:
+            idx = self._think(flat, time, t0)
+            if idx is not None and flat[idx] == EMPTY:
+                return (idx // SIZE, idx % SIZE)
+        except Exception:
+            pass
+        return self._fallback(flat)
+
+    # ------------------------------------------------------------- planning
+    def _budget(self, time_ms, stones):
+        """(soft budget, hard limit) in seconds for this move."""
+        if time_ms is None or time_ms < 0:
+            return 2.0, 4.0
+        rem = time_ms / 1000.0
+        tmul = self.params.get('tmul', 1.0)
+        budget = min(BUDGET_CAP * tmul, rem * tmul / BUDGET_DIV)
+        if rem < 5.0:
+            budget = rem / 30.0
+        if stones < 4:
+            # bvar needs exact scores for black's 2nd stone: more time
+            cap = 0.3
+            if self.params.get('bvar', 0) and self.color == 0 and stones == 2:
+                cap = 0.8
+            budget = min(budget, cap)
+        budget = max(budget, 0.003)
+        # absolute limit for everything (search + VCF checks)
+        hard = min(budget * 1.5 + 0.1, rem * 0.25)
+        return budget, hard
+
+    def _think(self, flat, time_ms, t0):
+        c = self.color
+        o = 1 - c
+        self._trx = int(self.params.get('trx', 0))
+        self._cvcf = int(self.params.get('cvcf', 0))
+        st = _BoardJRM(flat)
+        if st.stones == 0:
+            # A deterministic black replays one line against a deterministic
+            # white in every game; a random diagonal start varies it.
+            if self.params.get('bmix', 0) and _RAND.random() < self.params['bmix']:
+                return CENTER + _RAND.choice((-SIZE - 1, -SIZE + 1, SIZE - 1, SIZE + 1))
+            return CENTER
+        budget, hard = self._budget(time_ms, st.stones)
+        self._deadline = t0 + budget
+        self._hard = t0 + hard
+        self._nodes = 0
+        self._killers = [[None, None] for _ in range(MAX_PLY + 2)]
+        if len(self._tt) > 250000:
+            self._tt = {}
+        self._vtt = {}
+        self.last_info = ('?', 0, 0)
+
+        # 0) opening book for white's first move
+        if c == 1 and st.stones == 1 and WHITE_BOOK:
+            m = self._book_reply(st)
+            if m is not None:
+                self.last_info = ('book', 0, 0)
+                return m
+
+        # 1) win right now
+        for m in st.win_cells(c):
+            cap, status = st.make(m, c)
+            st.unmake(m, c, cap)
+            if status == 1:
+                self.last_info = ('win', 0, 0)
+                return m
+
+        # 2) the opponent threatens five -> only real defenses
+        if st.wins[o]:
+            moves = self._defenses(st, c)
+            if not moves:
+                return min(st.win_cells(o))
+            if len(moves) == 1:
+                self.last_info = ('forced', 0, 0)
+                return moves[0]
+        elif time_ms is not None and 0 <= time_ms < PANIC_MS:
+            # almost out of time: no search, best-ordered move
+            self.last_info = ('panic', 0, 0)
+            moves = self._moves(st, c, ROOT_WIDTH, None, 0)
+            return moves[0] if moves else None
+        else:
+            # 3) our own forced win by continuous fours
+            m = -1
+            if USE_VCF:
+                m = self._try_vcf(st, c, VCF_DEPTH, VCF_NODES * 3)
+            if m >= 0:
+                self.last_info = ('vcf', 0, 0)
+                return m
+            moves = self._moves(st, c, ROOT_WIDTH, None, 0)
+            if not moves:
+                return None
+            if len(moves) == 1:
+                return moves[0]
+
+        # 4) iterative deepening alpha-beta
+        best = moves[0]
+        order = moves
+        depth = 1
+        val = 0
+        margin = 0
+        if (OPENING_MARGIN > 0 and st.stones <= OPENING_STONES
+                and OPENING_SIDE in (c, 2)
+                and not st.wins[c] and not st.wins[o]):
+            margin = OPENING_MARGIN
+        bvar = 0
+        if (self.params.get('bvar', 0) and c == 0 and st.stones == 2
+                and not st.wins[c] and not st.wins[o]):
+            bvar = margin = self.params['bvar']
+        scores = None
+        while depth <= MAX_DEPTH:
+            height = len(st.stack)
+            try:
+                val, m, order2 = self._root(st, moves, depth, c, margin)
+                scores = self._root_scores
+            except _TimeUpJRM:
+                st.unwind(height)
+                if self._iter_best is not None:
+                    best = self._iter_best
+                break
+            best = m
+            moves = order = order2
+            if val >= WIN - 1000 or val <= -(WIN - 1000):
+                break
+            if perf_counter() - t0 > budget * ITER_STOP:
+                break
+            depth += 1
+        self.last_info = ('search', depth, self._nodes)
+
+        # opening variety: random pick among the near-best moves
+        if margin and scores and abs(val) < WIN - 1000:
+            pool = sorted(m for m, v in scores.items() if v >= val - margin)
+            if bvar:
+                pool = self._distinct(st, pool, scores)
+            if len(pool) > 1:
+                best = _RAND.choice(pool)
+                self.last_info = ('random', depth, len(pool))
+
+        # 5) do not hand the opponent a forced win by fours (with vsafe also
+        # after a proven loss and among several five-threat defences)
+        vs = self.params.get('vsafe', 0)
+        if USE_VCF and (vs or (not st.wins[o] and val > -(WIN - 1000))):
+            best = self._vcf_safe(st, c, best, order)
+        return best
+
+    def _distinct(self, st, pool, scores):
+        """Best move of each of the 3 best classes of pool moves that are not
+        mirror images of each other in the current position."""
+        b = st.b
+        stones = [i for i in range(NCELL) if b[i] != EMPTY]
+        syms = [p for p in SYMP if all(b[p[i]] == b[i] for i in stones)]
+        seen = set()
+        out = []
+        for m in sorted(pool, key=lambda x: -scores[x]):
+            k = min(p[m] for p in syms)
+            if k not in seen:
+                seen.add(k)
+                out.append(m)
+                if len(out) == 3:
+                    break
+        return out
+
+    def _book_reply(self, st):
+        first = [i for i in range(NCELL) if st.b[i] == 0]
+        if len(first) != 1:
+            return None
+        r0, c0 = divmod(first[0], SIZE)
+        cands = []
+        for kind in WHITE_BOOK:
+            for dr, dc in BOOK_OFFSETS[kind]:
+                r, cc = r0 + dr, c0 + dc
+                if 0 <= r < SIZE and 0 <= cc < SIZE:
+                    d = abs(r - SIZE // 2) + abs(cc - SIZE // 2)
+                    cands.append((d, r * SIZE + cc))
+        if not cands:
+            return None
+        # stay towards the centre if black did not start in the middle
+        dmin = min(d for d, _ in cands)
+        pool = sorted(m for d, m in cands if d <= dmin + 1)
+        return _RAND.choice(pool)
+
+    def _root(self, st, moves, depth, c, margin=0):
+        """One iteration at the root.  Moves scoring within `margin` of the
+        best get exact scores (stored in self._root_scores)."""
+        o = 1 - c
+        alpha = -INF
+        best_v = -INF
+        best_m = moves[0]
+        scored = []
+        self._iter_best = None
+        for i, m in enumerate(moves):
+            cap, status = st.make(m, c)
+            if status:
+                if status == 1:
+                    v = WIN - 1
+                elif status == 2:
+                    v = -(WIN - 1)
+                else:
+                    v = 0
+            else:
+                v = -self._negamax(st, depth - 1, -INF, -(alpha - margin),
+                                   o, 1)
+            st.unmake(m, c, cap)
+            scored.append((v, -i, m))
+            if v > best_v:
+                best_v = v
+                best_m = m
+                self._iter_best = m
+                if v > alpha:
+                    alpha = v
+        scored.sort(reverse=True)
+        self._root_scores = {m: v for v, _, m in scored}
+        return best_v, best_m, [m for _, _, m in scored]
+
+    # --------------------------------------------------------------- search
+    def _negamax(self, st, depth, alpha, beta, c, ply):
+        self._nodes += 1
+        if not (self._nodes & 127) and perf_counter() > self._deadline:
+            raise _TimeUpJRM()
+        o = 1 - c
+        if st.wins[c]:
+            return WIN - ply
+        if ply >= MAX_PLY:
+            return st.evaluate(c)
+        forced = bool(st.wins[o])
+        if forced:
+            moves = self._defenses(st, c)
+            if not moves:
+                return -(WIN - ply - 1)
+        elif depth <= 0:
+            return st.evaluate(c)
+        else:
+            moves = None
+
+        key = st.h ^ ZSIDE[c]
+        ent = self._tt.get(key)
+        tt_move = None
+        if ent is not None:
+            e_depth, e_flag, e_val, tt_move = ent
+            # trx: no cutoff at three-rule nodes at ply 1, where a stored
+            # result may come from the strict three-rule of an older search
+            if e_depth >= depth and not (
+                    self._trx and ply == 1 and not forced
+                    and st.ofours[o] and not st.ofours[c]):
+                if e_flag == 0:
+                    return e_val
+                if e_flag == 1 and e_val >= beta:
+                    return e_val
+                if e_flag == 2 and e_val <= alpha:
+                    return e_val
+        if moves is None:
+            width = WIDTH[ply] if ply < len(WIDTH) else WIDTH[-1]
+            moves = self._moves(st, c, width, tt_move, ply)
+            if not moves:
+                return 0
+        elif tt_move is not None and tt_move in moves:
+            moves.remove(tt_move)
+            moves.insert(0, tt_move)
+
+        a0 = alpha
+        best = -INF
+        best_m = moves[0]
+        for m in moves:
+            cap, status = st.make(m, c)
+            if status:
+                if status == 1:
+                    v = WIN - ply - 1
+                elif status == 2:
+                    v = -(WIN - ply - 1)
+                else:
+                    v = 0
+            else:
+                # forced replies (blocking a five-threat) do not use depth
+                nd = depth if forced else depth - 1
+                v = -self._negamax(st, nd, -beta, -alpha, o, ply + 1)
+            st.unmake(m, c, cap)
+            if v > best:
+                best = v
+                best_m = m
+                if v > alpha:
+                    alpha = v
+                    if alpha >= beta:
+                        if not forced and not cap:
+                            ks = self._killers[ply]
+                            if ks[0] != m:
+                                ks[1] = ks[0]
+                                ks[0] = m
+                        break
+        if best <= a0:
+            flag = 2
+        elif best >= beta:
+            flag = 1
+        else:
+            flag = 0
+        self._tt[key] = (depth, flag, best, best_m)
+        return best
+
+    def _moves(self, st, c, width, tt_move, ply):
+        o = 1 - c
+        gi = 6 + c
+        linfo = st.linfo
+        b = st.b
+        if USE_THREE_RULE and st.ofours[o] and not st.ofours[c]:
+            # the opponent has a live three: block it, make a four, or capture
+            cand = set()
+            for lid in st.ofours[o]:
+                cells = LINES[lid]
+                for off in linfo[lid][8 + o]:
+                    cand.add(cells[off])
+            cand |= _cells(st.fours[c])
+            cand |= _cells(st.caps[c])
+            scored = []
+            for m in cand:
+                s = 0
+                for lid, off, _ in CELL_LINES[m]:
+                    s += linfo[lid][gi][off]
+                scored.append((s, m))
+            scored.sort(reverse=True)
+            moves = [m for _, m in scored]
+            if self._trx and ply <= 1:
+                # trx: also the best moves outside the three-rule set
+                extra = []
+                for idx in st.cand:
+                    if b[idx] != EMPTY or idx in cand:
+                        continue
+                    s = 0
+                    for lid, off, _ in CELL_LINES[idx]:
+                        s += linfo[lid][gi][off]
+                    extra.append((s, idx))
+                extra.sort(reverse=True)
+                moves += [m for _, m in extra[:self._trx]]
+        else:
+            scored = []
+            for idx in st.cand:
+                if b[idx] != EMPTY:
+                    continue
+                s = 0
+                for lid, off, _ in CELL_LINES[idx]:
+                    s += linfo[lid][gi][off]
+                scored.append((s, idx))
+            scored.sort(reverse=True)
+            moves = [m for _, m in scored[:width]]
+            if ply < len(self._killers):
+                for k in self._killers[ply]:
+                    if (k is not None and b[k] == EMPTY and st.near[k]
+                            and k not in moves):
+                        moves.append(k)
+        if tt_move is not None and b[tt_move] == EMPTY:
+            if tt_move in moves:
+                moves.remove(tt_move)
+            moves.insert(0, tt_move)
+        return moves
+
+    def _defenses(self, st, c):
+        """Moves after which the opponent has no five-threat left."""
+        o = 1 - c
+        cand = st.win_cells(o) | st.capture_cells(c)
+        good = []
+        for m in cand:
+            cap, status = st.make(m, c)
+            if status & 1:
+                ok = True
+            elif status & 2:
+                ok = False
+            else:
+                ok = not st.wins[o]
+            st.unmake(m, c, cap)
+            if ok:
+                good.append((st.gain(m, c), m))
+        good.sort(reverse=True)
+        return [m for _, m in good]
+
+    # ------------------------------------------------------------------ VCF
+    def _try_vcf(self, st, c, depth, limit):
+        """Winning first move by continuous fours for c, or -1."""
+        m = -1
+        if st.fours[c]:
+            self._vnodes = 0
+            self._vlimit = limit
+            height = len(st.stack)
+            try:
+                m = self._vcf(st, c, depth)
+            except (_VcfAbortJRM, _TimeUpJRM):
+                st.unwind(height)
+                m = -1
+        if m >= 0 or not self._cvcf or not (st.fours[c] or st.caps[c]):
+            return m
+        # cvcf: second pass that also tries captures leaving c a five-cell
+        # (at most CVCF_CAPS per line), shallow depths first, own node cap
+        self._vnodes = 0
+        self._vlimit = self._cvcf
+        self._vx = ZX
+        self._vcapn = 0
+        height = len(st.stack)
+        try:
+            for d in CVCF_DEPTHS + (depth,):
+                if d > depth:
+                    break
+                m = self._vcf(st, c, d)
+                if m >= 0:
+                    return m
+            return -1
+        except (_VcfAbortJRM, _TimeUpJRM):
+            st.unwind(height)
+            return -1
+        finally:
+            self._vx = 0
+
+    def _vcf(self, st, c, depth):
+        self._vnodes += 1
+        if self._vnodes > self._vlimit:
+            raise _VcfAbortJRM()
+        if not (self._vnodes & 63) and perf_counter() > self._hard:
+            raise _TimeUpJRM()
+        o = 1 - c
+        if st.wins[c]:
+            return min(st.win_cells(c))
+        xcap = self._vx and st.caps[c] and self._vcapn < CVCF_CAPS
+        if st.wins[o] or depth <= 0 or not (st.fours[c] or xcap):
+            return -1
+        key = st.h ^ ZSIDE[c] ^ self._vx
+        ent = self._vtt.get(key)
+        if ent is not None:
+            if ent[0]:
+                return ent[1]
+            if ent[1] >= depth:
+                return -1
+        opens = _cells(st.ofours[c])
+        rest = _cells(st.fours[c]) - opens
+        order = list(opens)
+        if xcap:
+            order += sorted(_cells(st.caps[c]) - opens - rest)
+        order += sorted(rest)
+        for m in order:
+            cap, status = st.make(m, c)
+            if status or st.wins[o] or not st.wins[c]:
+                st.unmake(m, c, cap)
+                continue
+            if cap:
+                self._vcapn += 1
+            ok = True
+            for d in self._defenses(st, o):
+                cap2, status2 = st.make(d, o)
+                if status2 & 1:
+                    ok = False
+                elif not status2 & 2:
+                    ok = self._vcf(st, c, depth - 1) >= 0
+                st.unmake(d, o, cap2)
+                if not ok:
+                    break
+            if cap:
+                self._vcapn -= 1
+            st.unmake(m, c, cap)
+            if ok:
+                self._vtt[key] = (True, m)
+                return m
+        self._vtt[key] = (False, depth)
+        return -1
+
+    def _vcf_safe(self, st, c, best, order):
+        o = 1 - c
+        vs = self.params.get('vsafe', 0)
+        tried = 0
+        for m in [best] + [x for x in order if x != best]:
+            if tried >= (vs or 6):
+                break
+            # vsafe: past the hard limit every VCF check aborts and would
+            # pass an unchecked move as safe
+            if vs and tried and perf_counter() > self._hard:
+                break
+            tried += 1
+            cap, status = st.make(m, c)
+            if status:
+                st.unmake(m, c, cap)
+                return m if status & 1 else best
+            danger = (not st.wins[c]
+                      and self._try_vcf(st, o, VCF_DEPTH, VCF_NODES) >= 0)
+            st.unmake(m, c, cap)
+            if not danger:
+                return m
+        return best
+
+    # ------------------------------------------------------------- fallback
+    def _fallback(self, flat):
+        best = None
+        for idx in range(NCELL):
+            if flat[idx] == EMPTY:
+                r, c = divmod(idx, SIZE)
+                d = abs(r - SIZE // 2) + abs(c - SIZE // 2)
+                if best is None or d < best[0]:
+                    best = (d, r, c)
+        if best is None:
+            return (0, 0)
+        return (best[1], best[2])
