@@ -37,7 +37,7 @@ How they were used:
   league and A/B test runners, regression tests) and the tests. Each source
   file states at the top which AI tool wrote or adapted it.
 - Analysing lost games and planning the A/B experiments that chose the
-  final settings (over 35,000 test games against the team's agents).
+  final settings (over 110,000 test games against the team's agents).
 All prompts and responses are included in llm-usage/.
 
 4. Acknowledgments
