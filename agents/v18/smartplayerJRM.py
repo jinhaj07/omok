@@ -1458,8 +1458,8 @@ class SmartPlayerJRM(PlayerJRM):
         self.params.update({'text': 0})
         # partial = use a better move proved by an unfinished last iteration.
         # On together with first = 0 below (Geonwoo7 settings). A/B cycles
-        # 38-39 (empty board, 20 opponents, 0.91-1.12 min): 3267/4136 (0.790)
-        # vs 3169/4135 (0.766), z 2.57; unseen opponents 0.789 vs 0.734.
+        # 38-39 (empty board, 20 opponents, 0.91-1.12 min): 3330/4200 (0.793)
+        # vs 3203/4200 (0.763), z 3.34; unseen opponents 0.791 vs 0.728.
         # Same engine head to head at 1 minute: 49 wins in 60 games.
         self.params.update({'partial': 1})
         # softr = share of the move budget after which no new iteration starts.
@@ -1478,7 +1478,7 @@ class SmartPlayerJRM(PlayerJRM):
         # Searched reply or a random knight's move half the time: simulated
         # 8-game pass rate 0.899 (worst opponent 0.71) vs 0.785 (0.28).
         # With partial = 1, the searched reply alone scored better in A/B
-        # cycle 39: white 0.679 vs 0.623 with the mix (20 opponents).
+        # cycle 39: white 0.679 vs 0.618 with the mix (20 opponents).
         self.params.update({'first': 0, 'fdr': 2, 'fdc': 1, 'fsearch': 0, 'fmix': 0.5})
         # bfirst: A/B cycle 26 (black only, empty board): first stone at the
         # centre 267/280, at the four diagonal neighbours 1086/1120 (0.970).
